@@ -1,9 +1,11 @@
 import {
+  type InferAgentUIMessage,
   ToolLoopAgent,
   gateway,
   stepCountIs,
   wrapLanguageModel,
   type TypedToolResult,
+  type InferUITools,
 } from "ai";
 import { z } from "zod";
 import {
@@ -48,10 +50,11 @@ export type DeepAgentCallOptions = z.infer<typeof callOptionsSchema>;
 const model = gateway("anthropic/claude-haiku-4.5");
 
 export const deepAgent = new ToolLoopAgent({
-  model: wrapLanguageModel({
-    middleware: devToolsMiddleware(),
-    model,
-  }),
+  // model: wrapLanguageModel({
+  //   middleware: devToolsMiddleware(),
+  //   model,
+  // }),
+  model, // non dev-tools model
   instructions: buildSystemPrompt({}),
   tools: addCacheControl({
     tools: {
@@ -63,8 +66,8 @@ export const deepAgent = new ToolLoopAgent({
       glob: globTool,
       bash: bashTool,
       task: taskTool,
-      memory_save: memorySaveTool,
-      memory_recall: memoryRecallTool,
+      // memory_save: memorySaveTool,
+      // memory_recall: memoryRecallTool,
     },
     model,
   }),
@@ -87,6 +90,7 @@ export const deepAgent = new ToolLoopAgent({
       ...settings,
       model,
       instructions: buildSystemPrompt({
+        cwd: workingDirectory,
         customInstructions,
         todosContext,
         scratchpadContext,
@@ -106,3 +110,13 @@ export function extractTodosFromStep(
   }
   return null;
 }
+
+export type DeepAgent = typeof deepAgent;
+
+export type DeepAgentUIMessage = InferAgentUIMessage<DeepAgent>;
+
+export type DeepAgentTools = typeof deepAgent.tools;
+
+export type DeepAgentUITools = InferUITools<DeepAgentTools>;
+
+export type DeepAgentUIMessagePart = DeepAgentUIMessage["parts"][number];

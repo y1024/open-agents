@@ -79,11 +79,16 @@ Serialize when there are dependencies:
 - Edits to the same file`;
 
 export function buildSystemPrompt(options: {
+  cwd?: string;
   todosContext?: string;
   scratchpadContext?: string;
   customInstructions?: string;
 }): string {
   const parts = [DEEP_AGENT_SYSTEM_PROMPT];
+
+  if (options.cwd) {
+    parts.push(`\n# Environment\n\nWorking directory: ${options.cwd}`);
+  }
 
   if (options.customInstructions) {
     parts.push(`\n# Project-Specific Instructions\n\n${options.customInstructions}`);
