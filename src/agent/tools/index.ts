@@ -1,4 +1,4 @@
-export { todoWriteTool, todoReadTool } from "./planning/todo";
+export { todoWriteTool } from "./planning/todo";
 export { readFileTool } from "./file-system/read";
 export { writeFileTool, editFileTool } from "./file-system/write";
 export { grepTool } from "./file-system/grep";

@@ -44,21 +44,3 @@ IMPORTANT:
     };
   },
 });
-
-export const todoReadTool = tool({
-  description: `Read the current todo list for the session.
-
-USAGE:
-- Use this tool to fetch the latest version of the structured todo list
-- The todo list is also injected into system context; call this when you specifically need the raw structured data
-
-IMPORTANT:
-- This tool is read-only and does NOT modify the todo list
-- To change the todo list (add, remove, or update tasks), always use todoWriteTool with the full updated list`,
-  inputSchema: z.object({}),
-  execute: async () => {
-    return {
-      message: "Todo list is injected into context. Check the system state.",
-    };
-  },
-});
