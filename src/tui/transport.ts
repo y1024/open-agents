@@ -41,13 +41,24 @@ export function createAgentTransport({
 
       // Capture usage after stream completes (non-blocking)
       // Use per-call usage (last step) for accurate context % display
-      Promise.resolve(result.usage).then((usage) => {
-        onUsageUpdate?.(usage);
-      }).catch(() => {
-        // Ignore errors from aborted requests
-      });
+      Promise.resolve(result.usage)
+        .then((usage) => {
+          onUsageUpdate?.(usage);
+        })
+        .catch(() => {
+          // Ignore errors from aborted requests
+        });
 
-      return result.toUIMessageStream();
+      return result.toUIMessageStream<TUIAgentUIMessage>({
+        messageMetadata: ({ part }) => {
+          if (part.type === "finish") {
+            return { usage: part.totalUsage };
+          }
+          if (part.type === "finish-step") {
+            return { usage: part.usage };
+          }
+        },
+      });
     },
 
     reconnectToStream: async () => {

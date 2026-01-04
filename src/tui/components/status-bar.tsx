@@ -78,6 +78,7 @@ type StatusBarProps = {
   thinkingState: ThinkingState;
   todos?: TodoItem[] | null;
   isTodoVisible?: boolean;
+  inputTokens?: number | null;
 };
 
 function getThinkingMeta(thinkingState: ThinkingState): string {
@@ -90,13 +91,22 @@ function getThinkingMeta(thinkingState: ThinkingState): string {
   return "";
 }
 
+function formatTokens(tokens: number): string {
+  if (tokens >= 1000) {
+    return `${(tokens / 1000).toFixed(1)}k`;
+  }
+  return tokens.toString();
+}
+
 // Status indicator - not memoized to allow animation
 function StatusIndicator({
   isStreaming,
   thinkingState,
+  inputTokens,
 }: {
   isStreaming: boolean;
   thinkingState: ThinkingState;
+  inputTokens?: number | null;
 }) {
   const { word, pulsePosition } = useSillyWord();
 
@@ -106,8 +116,10 @@ function StatusIndicator({
 
   // Build the meta text
   const thinkingMeta = getThinkingMeta(thinkingState);
-  const metaText = thinkingMeta
-    ? `(esc to interrupt · ${thinkingMeta})`
+  const tokensMeta = inputTokens ? `${formatTokens(inputTokens)} tokens` : "";
+  const metaParts = [thinkingMeta, tokensMeta].filter(Boolean).join(" · ");
+  const metaText = metaParts
+    ? `(esc to interrupt · ${metaParts})`
     : "(esc to interrupt)";
 
   if (isStreaming) {
@@ -198,6 +210,7 @@ export function StatusBar({
   thinkingState,
   todos,
   isTodoVisible = true,
+  inputTokens,
 }: StatusBarProps) {
   const hasTodos = todos && todos.length > 0;
   const hasIncompleteTodos = hasTodos && todos.some((t) => t.status !== "completed");
@@ -217,6 +230,7 @@ export function StatusBar({
         <StatusIndicator
           isStreaming={isStreaming}
           thinkingState={thinkingState}
+          inputTokens={inputTokens}
         />
         {hasTodos && <Text color="gray">{todoHint}</Text>}
       </Box>

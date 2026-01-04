@@ -2,6 +2,7 @@ import type {
   DynamicToolUIPart,
   InferAgentUIMessage,
   InferUITools,
+  LanguageModelUsage,
   ToolUIPart,
 } from "ai";
 import type { tuiAgent } from "./config";
@@ -11,8 +12,12 @@ export type TUIAgentCallOptions = Parameters<
   TUIAgent["generate"]
 >["0"]["options"];
 
+export type TUIAgentMessageMetadata = {
+  usage: LanguageModelUsage;
+}
+
 // all derived
-export type TUIAgentUIMessage = InferAgentUIMessage<TUIAgent>;
+export type TUIAgentUIMessage = InferAgentUIMessage<TUIAgent, TUIAgentMessageMetadata>;
 export type TUIAgentUIMessagePart = TUIAgentUIMessage["parts"][number];
 export type TUIAgentTools = TUIAgent["tools"];
 export type TUIAgentUITools = InferUITools<TUIAgentTools>;
