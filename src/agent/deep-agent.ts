@@ -51,8 +51,6 @@ export const deepAgent = new ToolLoopAgent({
       glob: globTool(),
       bash: bashTool({ needsApproval: true }),
       task: taskTool,
-      // memory_save: memorySaveTool,
-      // memory_recall: memoryRecallTool,
     },
     model,
   }),
