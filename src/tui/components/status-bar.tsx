@@ -26,15 +26,16 @@ const PULSE_SPEED = 100;
 function useSillyWord() {
   const [index, setIndex] = useState(() => Math.floor(Math.random() * SILLY_WORDS.length));
   const [pulsePosition, setPulsePosition] = useState(0);
-  const currentWord = SILLY_WORDS[index];
+  const currentWord = SILLY_WORDS[index] ?? "Thinking";
+  const wordLength = currentWord.length;
 
   // Pulse animation - moves highlight from left to right
   useEffect(() => {
     const timer = setInterval(() => {
-      setPulsePosition((prev) => (prev + 1) % (currentWord.length + 2));
+      setPulsePosition((prev) => (prev + 1) % (wordLength + 2));
     }, PULSE_SPEED);
     return () => clearInterval(timer);
-  }, [currentWord.length]);
+  }, [wordLength]);
 
   // Change word at interval
   useEffect(() => {
