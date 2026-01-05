@@ -1,5 +1,5 @@
 import * as path from "path";
-import type { AgentContext, AgentMode } from "../types";
+import type { AgentContext, AgentMode, AutoApprove, ApprovalRule } from "../types";
 import type { Sandbox } from "../sandbox";
 
 /**
@@ -61,6 +61,35 @@ export function getMode(experimental_context: unknown): AgentMode {
  */
 export function isBackgroundMode(experimental_context: unknown): boolean {
   return getMode(experimental_context) === "background";
+}
+
+/**
+ * Get the full approval context from experimental_context.
+ * Used by needsApproval functions to access mode, autoApprove, and approvalRules.
+ *
+ * @param experimental_context - The context passed to needsApproval functions
+ * @returns Object with sandbox, mode, autoApprove, and approvalRules
+ */
+export function getApprovalContext(experimental_context: unknown): {
+  sandbox: Sandbox;
+  workingDirectory: string;
+  mode: AgentMode;
+  autoApprove: AutoApprove;
+  approvalRules: ApprovalRule[];
+} {
+  const context = experimental_context as AgentContext | undefined;
+  if (!context?.sandbox) {
+    throw new Error(
+      "Context not initialized. Ensure the agent is configured with experimental_context."
+    );
+  }
+  return {
+    sandbox: context.sandbox,
+    workingDirectory: context.sandbox.workingDirectory,
+    mode: context.mode ?? "interactive",
+    autoApprove: context.autoApprove ?? "off",
+    approvalRules: context.approvalRules ?? [],
+  };
 }
 
 /**

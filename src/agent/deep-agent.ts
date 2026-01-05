@@ -18,7 +18,7 @@ import {
 import { buildSystemPrompt } from "./system-prompt";
 import type { TodoItem, AgentMode, ApprovalRule } from "./types";
 import { approvalRuleSchema } from "./types";
-import { addCacheControl, compactContext, getSandbox, sharedContext } from "./utils";
+import { addCacheControl, compactContext, getSandbox } from "./utils";
 import { gateway } from "../models";
 import { createLocalSandbox, type Sandbox } from "./sandbox";
 
@@ -72,12 +72,6 @@ export const deepAgent = new ToolLoopAgent({
     const autoApprove = options?.autoApprove ?? "off";
     const approvalRules: ApprovalRule[] = options?.approvalRules ?? [];
 
-    // Update shared context for tool approval functions
-    sharedContext.workingDirectory = workingDirectory;
-    sharedContext.mode = mode;
-    sharedContext.autoApprove = autoApprove;
-    sharedContext.approvalRules = approvalRules;
-
     const customInstructions = options?.customInstructions;
 
     // Use provided sandbox, or create a local sandbox with the working directory
@@ -93,7 +87,7 @@ export const deepAgent = new ToolLoopAgent({
         currentBranch: sandbox.currentBranch,
         customInstructions,
       }),
-      experimental_context: { sandbox, mode },
+      experimental_context: { sandbox, mode, autoApprove, approvalRules },
     };
   },
   onFinish: async ({ experimental_context }) => {

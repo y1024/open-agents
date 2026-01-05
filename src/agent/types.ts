@@ -33,6 +33,8 @@ export type AutoApprove = "off" | "edits" | "all";
 export interface AgentContext {
   sandbox: Sandbox;
   mode: AgentMode;
+  autoApprove: AutoApprove;
+  approvalRules: ApprovalRule[];
 }
 
 /**
