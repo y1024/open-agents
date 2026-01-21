@@ -342,8 +342,8 @@ export function TaskRenderer({
       {!isExpanded && isComplete && (
         <div className="mt-2 pl-5 text-sm text-muted-foreground">
           Complete ({toolParts.length} tool calls
-          {message?.metadata?.lastStepUsage?.inputTokens
-            ? `, ${formatTokens(message.metadata.lastStepUsage.inputTokens)} tokens`
+          {message?.metadata?.totalMessageUsage?.inputTokens
+            ? `, ${formatTokens(message.metadata.totalMessageUsage.inputTokens)} tokens`
             : ""}
           )
         </div>
