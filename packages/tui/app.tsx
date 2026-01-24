@@ -578,7 +578,9 @@ function AppContent({ options }: AppProps) {
       if (part.state !== "output-available") continue;
 
       // Also check that approval was actually granted (not denied)
-      const approval = (part as { approval?: { approved?: boolean } }).approval;
+      const approval = (
+        part as { approval?: { approved?: boolean; id?: string } }
+      ).approval;
       if (approval && approval.approved === false) continue;
 
       if (part.type === "tool-enter_plan_mode") {
@@ -591,7 +593,12 @@ function AppContent({ options }: AppProps) {
         const output = extractExitPlanModeOutput(part.output);
         if (output) {
           processedPlanToolsRef.current.add(part.toolCallId);
-          setPermissionMode("default");
+          // Only reset to default if no approval was involved.
+          // If approval was involved, PlanApprovalPanel already set the appropriate mode
+          // (either "edits" for auto-accept or "default" for manual approve).
+          if (!approval?.id) {
+            setPermissionMode("default");
+          }
         }
       }
     }
