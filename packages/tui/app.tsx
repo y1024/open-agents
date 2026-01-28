@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo, memo } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Text, useApp, useInput, Static } from "ink";
 import { isToolUIPart, getToolName, type FileUIPart } from "ai";
 import { useChat } from "@ai-sdk/react";
 import {
@@ -18,11 +18,16 @@ import { TaskGroupView } from "./components/task-group-view";
 import { StatusBar, StandaloneTodoList } from "./components/status-bar";
 import { InputBox } from "./components/input-box";
 import { Header } from "./components/header";
+import { CollapsedToolGroup } from "./components/collapsed-tool-group";
 import { defaultModelLabel } from "@open-harness/agent";
 import type { SlashCommandAction } from "./lib/slash-commands";
 import { pasteCollapseLineThreshold } from "./config";
 import { extractTodosFromLastAssistantMessage } from "./utils/extract-todos";
 import { listSessions, loadSession } from "./lib/session-storage";
+import {
+  collapseConsecutiveTools,
+  isCollapsedGroup,
+} from "./lib/message-collapsing";
 import type { SessionListItem } from "./lib/session-types";
 import type {
   TUIOptions,
@@ -35,6 +40,40 @@ import type { TaskToolUIPart, AskUserQuestionInput } from "@open-harness/agent";
 type AppProps = {
   options: TUIOptions;
 };
+
+/**
+ * Check if a message is complete (all tools have finished).
+ * A message is complete when:
+ * - It's not the last message, OR
+ * - It's not streaming AND all tools have output/error/denied state
+ */
+function isMessageComplete(
+  message: TUIAgentUIMessage,
+  isLastMessage: boolean,
+  isStreaming: boolean,
+): boolean {
+  // Messages that aren't the last one are always complete
+  if (!isLastMessage) return true;
+
+  // Last message while streaming is not complete
+  if (isStreaming) return false;
+
+  // Check that all tool parts have finished
+  for (const part of message.parts) {
+    if (isToolUIPart(part)) {
+      // Tool is still running or waiting for approval
+      if (
+        part.state === "input-streaming" ||
+        part.state === "input-available" ||
+        part.state === "approval-requested"
+      ) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
 
 function formatTime(date: Date): string {
   return date.toLocaleTimeString("en-US", {
@@ -249,18 +288,25 @@ const UserMessage = memo(function UserMessage({
 // Group consecutive task parts together while preserving order
 type RenderGroup =
   | { type: "part"; part: TUIAgentUIMessagePart; index: number }
-  | { type: "task-group"; tasks: TaskToolUIPart[]; startIndex: number };
+  | { type: "task-group"; tasks: TaskToolUIPart[]; startIndex: number }
+  | {
+      type: "collapsed-group";
+      group: ReturnType<typeof collapseConsecutiveTools>[number];
+      index: number;
+    };
 
 const AssistantMessage = memo(function AssistantMessage({
   message,
   activeApprovalId,
   isStreaming,
   isExpanded,
+  isComplete,
 }: {
   message: TUIAgentUIMessage;
   activeApprovalId: string | null;
   isStreaming: boolean;
   isExpanded: boolean;
+  isComplete: boolean;
 }) {
   const { state } = useChatContext();
   const timestamp = (message as { createdAt?: Date }).createdAt;
@@ -295,13 +341,34 @@ const AssistantMessage = memo(function AssistantMessage({
     };
   }, [message.parts, isStreaming]);
 
+  // First, collapse consecutive read/glob/grep tools for completed messages
+  const collapsedParts = useMemo(
+    () => collapseConsecutiveTools(message.parts, isComplete),
+    [message.parts, isComplete],
+  );
+
   // Group consecutive task parts together, keeping them in linear order
   const renderGroups = useMemo(() => {
     const groups: RenderGroup[] = [];
     let currentTaskGroup: TaskToolUIPart[] = [];
     let taskGroupStartIndex = 0;
 
-    message.parts.forEach((part, index) => {
+    collapsedParts.forEach((part, index) => {
+      // Handle collapsed groups
+      if (isCollapsedGroup(part)) {
+        // Flush any pending task group first
+        if (currentTaskGroup.length > 0) {
+          groups.push({
+            type: "task-group",
+            tasks: currentTaskGroup,
+            startIndex: taskGroupStartIndex,
+          });
+          currentTaskGroup = [];
+        }
+        groups.push({ type: "collapsed-group", group: part, index });
+        return;
+      }
+
       if (isToolUIPart(part) && part.type === "tool-task") {
         if (currentTaskGroup.length === 0) {
           taskGroupStartIndex = index;
@@ -331,7 +398,7 @@ const AssistantMessage = memo(function AssistantMessage({
     }
 
     return groups;
-  }, [message.parts]);
+  }, [collapsedParts]);
 
   return (
     <Box flexDirection="column">
@@ -349,6 +416,19 @@ const AssistantMessage = memo(function AssistantMessage({
               isStreaming={isStreaming}
             />
           );
+        }
+        if (group.type === "collapsed-group") {
+          // Type guard to ensure the group is a CollapsedGroup
+          const collapsedGroup = group.group;
+          if (isCollapsedGroup(collapsedGroup)) {
+            return (
+              <CollapsedToolGroup
+                key={`collapsed-${group.index}`}
+                group={collapsedGroup}
+              />
+            );
+          }
+          return null;
         }
         return renderPart(group.part, `${message.id}-${group.index}`, {
           activeApprovalId,
@@ -368,11 +448,13 @@ const Message = memo(function Message({
   activeApprovalId,
   isStreaming,
   isExpanded,
+  isComplete,
 }: {
   message: TUIAgentUIMessage;
   activeApprovalId: string | null;
   isStreaming: boolean;
   isExpanded: boolean;
+  isComplete: boolean;
 }) {
   if (message.role === "user") {
     return <UserMessage message={message} />;
@@ -384,6 +466,7 @@ const Message = memo(function Message({
         activeApprovalId={activeApprovalId}
         isStreaming={isStreaming}
         isExpanded={isExpanded}
+        isComplete={isComplete}
       />
     );
   }
@@ -403,15 +486,24 @@ const MessagesList = memo(function MessagesList({
 }) {
   return (
     <Box flexDirection="column">
-      {messages.map((message, index) => (
-        <Message
-          key={message.id || `msg-${index}`}
-          message={message}
-          activeApprovalId={activeApprovalId}
-          isStreaming={isStreaming && index === messages.length - 1}
-          isExpanded={isExpanded}
-        />
-      ))}
+      {messages.map((message, index) => {
+        const isLastMessage = index === messages.length - 1;
+        const isComplete = isMessageComplete(
+          message,
+          isLastMessage,
+          isStreaming,
+        );
+        return (
+          <Message
+            key={message.id || `msg-${index}`}
+            message={message}
+            activeApprovalId={activeApprovalId}
+            isStreaming={isStreaming && isLastMessage}
+            isExpanded={isExpanded}
+            isComplete={isComplete}
+          />
+        );
+      })}
     </Box>
   );
 });
@@ -552,6 +644,38 @@ function AppContent({ options }: AppProps) {
   });
 
   const isStreaming = status === "streaming" || status === "submitted";
+
+  // Static items include the header (always first) and completed messages
+  // This ensures the header stays at the top when messages are moved to static
+  type StaticItem =
+    | { type: "header"; id: string }
+    | { type: "message"; id: string; message: TUIAgentUIMessage };
+
+  // Split messages into static (completed, rendered once) and dynamic (active, re-rendered)
+  // Static messages are those that are complete and not the last message
+  const { staticItems, dynamicMessages } = useMemo(() => {
+    // Always start with the header as the first static item
+    const items: StaticItem[] = [{ type: "header", id: "__header__" }];
+    const dynamicMsgs: TUIAgentUIMessage[] = [];
+
+    for (let i = 0; i < messages.length; i++) {
+      const message = messages[i];
+      if (!message) continue;
+
+      const isLastMessage = i === messages.length - 1;
+      const complete = isMessageComplete(message, isLastMessage, isStreaming);
+
+      // Messages that are complete AND not the last message go to static
+      // The last message always stays in dynamic (even if complete) for context
+      if (complete && !isLastMessage) {
+        items.push({ type: "message", id: message.id, message });
+      } else {
+        dynamicMsgs.push(message);
+      }
+    }
+
+    return { staticItems: items, dynamicMessages: dynamicMsgs };
+  }, [messages, isStreaming]);
 
   // Clear interrupted state when streaming starts
   useEffect(() => {
@@ -771,19 +895,44 @@ function AppContent({ options }: AppProps) {
   );
 
   // Show message list with either approval panel or input box at bottom
+  // Use Ink's <Static> component for header and completed messages (rendered once, never re-rendered)
+  // Dynamic messages are rendered normally and update on state changes
   return (
     <Box flexDirection="column" paddingLeft={1} paddingRight={1}>
-      <Header
-        name={options?.header?.name}
-        version={options?.header?.version}
-        model={
-          state.settings.modelId ?? options?.header?.model ?? defaultModelLabel
-        }
-        cwd={state.workingDirectory}
-      />
+      {/* Static items: header + completed messages, rendered once by Ink's <Static> */}
+      <Static items={staticItems}>
+        {(item) => {
+          if (item.type === "header") {
+            return (
+              <Header
+                key="header"
+                name={options?.header?.name}
+                version={options?.header?.version}
+                model={
+                  state.settings.modelId ??
+                  options?.header?.model ??
+                  defaultModelLabel
+                }
+                cwd={state.workingDirectory}
+              />
+            );
+          }
+          return (
+            <Message
+              key={item.id}
+              message={item.message}
+              activeApprovalId={null}
+              isStreaming={false}
+              isExpanded={isExpanded}
+              isComplete={true}
+            />
+          );
+        }}
+      </Static>
 
+      {/* Dynamic messages: re-rendered on state changes */}
       <MessagesList
-        messages={messages}
+        messages={dynamicMessages}
         activeApprovalId={activeApprovalId}
         isStreaming={isStreaming}
         isExpanded={isExpanded}

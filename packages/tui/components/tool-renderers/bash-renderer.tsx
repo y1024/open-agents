@@ -1,16 +1,31 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { Box, Text } from "ink";
 import type { ToolRendererProps } from "../../lib/render-tool";
 import { ToolSpinner, getDotColor } from "./shared";
+import { truncateOutput } from "../../lib/output-truncation";
 
 export function BashRenderer({ part, state }: ToolRendererProps<"tool-bash">) {
   const command = String(part.input?.command ?? "");
   const exitCode =
     part.state === "output-available" ? part.output?.exitCode : undefined;
-  const stdout =
+  const rawStdout =
     part.state === "output-available" ? part.output?.stdout : undefined;
-  const stderr =
+  const rawStderr =
     part.state === "output-available" ? part.output?.stderr : undefined;
+
+  // Truncate large outputs to prevent performance issues
+  const { stdout, stderr, wasTruncated } = useMemo(() => {
+    const truncatedStdout = rawStdout ? truncateOutput(rawStdout) : null;
+    const truncatedStderr = rawStderr ? truncateOutput(rawStderr) : null;
+    return {
+      stdout: truncatedStdout?.content ?? undefined,
+      stderr: truncatedStderr?.content ?? undefined,
+      wasTruncated:
+        (truncatedStdout?.truncated ?? false) ||
+        (truncatedStderr?.truncated ?? false),
+    };
+  }, [rawStdout, rawStderr]);
+
   const hasOutput = stdout || stderr;
   const isError = exitCode !== undefined && exitCode !== 0;
 
@@ -18,7 +33,7 @@ export function BashRenderer({ part, state }: ToolRendererProps<"tool-bash">) {
   const combinedOutput = [stdout, stderr].filter(Boolean).join("\n").trim();
   const allLines = combinedOutput.split("\n");
   const outputLines = allLines.slice(-3); // Last 3 lines
-  const hasMoreLines = allLines.length > 3;
+  const hasMoreLines = allLines.length > 3 || wasTruncated;
 
   const dotColor = state.denied
     ? "red"

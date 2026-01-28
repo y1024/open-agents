@@ -207,7 +207,119 @@ Use `catalog:` for shared external versions:
 }
 ```
 
+## Ink Performance (TUI)
+
+### The Problem
+
+Ink re-renders the entire React tree on every state change, which causes performance issues with long conversations. The naive approach of using `useStdout().write()` to write "completed" messages directly to stdout **does not work** - Ink clears from the cursor upward based on its tracked line count, overwriting any manually written content.
+
+### How Claude Code Solves This
+
+Claude Code built a **custom dual-output rendering system** by modifying Ink's internals:
+
+1. **Custom Reconciler**: Modified React reconciler to track `internal_static` nodes
+   ```javascript
+   appendChild(parent, child) {
+     if (child.internal_static) {
+       root.isStaticDirty = true;
+       root.staticNode = child;
+     }
+   }
+   ```
+
+2. **Two-Pass Render**: Renders the tree twice per frame
+   ```javascript
+   // Pass 1: Render dynamic content, skip static nodes
+   renderTree(root, mainBuffer, {skipStaticElements: true});
+
+   // Pass 2: Render static content separately
+   renderTree(staticNode, staticBuffer, {skipStaticElements: false});
+
+   return {
+     output: mainBuffer.output,       // Dynamic - cleared each frame
+     staticOutput: staticBuffer.output // Static - written once
+   };
+   ```
+
+3. **Custom Renderer Class**: Manages two output streams
+   ```javascript
+   class Renderer {
+     state = {
+       fullStaticOutput: "",  // Accumulated static (append-only)
+       previousOutput: ""     // Last dynamic frame (for line-count diffing)
+     }
+
+     render(prevFrame, nextFrame) {
+       // 1. Append new static output (write once, never clear)
+       if (nextFrame.staticOutput) {
+         this.state.fullStaticOutput += nextFrame.staticOutput;
+       }
+
+       // 2. Clear only the dynamic portion (based on previousOutput line count)
+       const linesToClear = countLines(this.state.previousOutput);
+       this.state.previousOutput = nextFrame.output;
+
+       return [
+         {type: "clear", count: linesToClear},
+         {type: "stdout", content: nextFrame.staticOutput},  // New static
+         {type: "stdout", content: nextFrame.output}          // Dynamic
+       ];
+     }
+   }
+   ```
+
+### Key Insight
+
+The terminal output looks like:
+```
+┌─────────────────────────────────────┐
+│  fullStaticOutput (never cleared)   │  ← Completed messages
+├─────────────────────────────────────┤
+│  output (cleared & redrawn)         │  ← Active/streaming content
+└─────────────────────────────────────┘
+```
+
+Only the dynamic portion gets the clear-and-redraw treatment. Static content accumulates at the top and is never touched after being written.
+
+### Why `useStdout().write()` Doesn't Work
+
+Ink's `useStdout().write()` writes to stdout but doesn't inform Ink's renderer about protected regions. When Ink re-renders, it:
+1. Counts lines in its tracked output
+2. Moves cursor up that many lines
+3. Clears and rewrites
+
+This overwrites anything written via `write()` because Ink doesn't know to skip those lines.
+
+### Why Claude Code Didn't Use `<Static>`
+
+Ink has a built-in `<Static items={[...]}>` component, but Claude Code chose not to use it for:
+1. Less control over timing (when content becomes static)
+2. Flicker issues with large updates
+3. Need for custom diffing logic
+4. Precise control over the static/dynamic boundary
+
+### Options for Open Harness
+
+1. **Use Ink's `<Static>` component** (simpler)
+   - Renders items once "above" Ink's dynamic area
+   - Items stay put as Ink re-renders below them
+   - Requires stable item keys
+   - May have flicker with large updates
+
+2. **Build custom renderer like Claude Code** (complex)
+   - Requires forking/extending Ink internals
+   - Full control over static/dynamic separation
+   - Significant implementation effort
+
+### Related Files
+
+- `packages/tui/lib/output-controller.tsx` - Current (non-working) approach
+- `packages/tui/lib/render-message-to-string.ts` - Chalk-based string rendering
+- `packages/tui/lib/message-collapsing.ts` - Collapsing consecutive tools
+- `packages/tui/lib/output-truncation.ts` - 60KB output limit
+
 ## Lessons Learned
 
 - Skill discovery de-duplicates by first-seen name, so project skill directories must be scanned before user-level directories to allow project overrides.
 - The system prompt should list all model-invocable skills (including non-user-invocable ones), and reserve user-invocable filtering for the slash-command UI.
+- Ink's `useStdout().write()` does NOT create a protected zone - Ink will overwrite it on re-render. Must use `<Static>` component or build custom renderer infrastructure.
