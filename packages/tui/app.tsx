@@ -1,4 +1,11 @@
-import React, { useEffect, useState, useCallback, useMemo, memo } from "react";
+import React, {
+  useEffect,
+  useState,
+  useCallback,
+  useMemo,
+  memo,
+  useRef,
+} from "react";
 import { Box, Text, useApp, useInput, Static } from "ink";
 import { isToolUIPart, getToolName, type FileUIPart } from "ai";
 import { useChat } from "@ai-sdk/react";
@@ -24,10 +31,12 @@ import type { SlashCommandAction } from "./lib/slash-commands";
 import { pasteCollapseLineThreshold } from "./config";
 import { extractTodosFromLastAssistantMessage } from "./utils/extract-todos";
 import { listSessions, loadSession } from "./lib/session-storage";
+import { useRemount } from "./index";
 import {
   collapseConsecutiveTools,
   isCollapsedGroup,
 } from "./lib/message-collapsing";
+import { AnimationProvider } from "./lib/animation-context";
 import type { SessionListItem } from "./lib/session-types";
 import type {
   TUIOptions,
@@ -473,40 +482,69 @@ const Message = memo(function Message({
   return null;
 });
 
-const MessagesList = memo(function MessagesList({
-  messages,
-  activeApprovalId,
-  isStreaming,
-  isExpanded,
-}: {
-  messages: TUIAgentUIMessage[];
-  activeApprovalId: string | null;
-  isStreaming: boolean;
-  isExpanded: boolean;
-}) {
-  return (
-    <Box flexDirection="column">
-      {messages.map((message, index) => {
-        const isLastMessage = index === messages.length - 1;
-        const isComplete = isMessageComplete(
-          message,
-          isLastMessage,
-          isStreaming,
-        );
-        return (
-          <Message
-            key={message.id || `msg-${index}`}
-            message={message}
-            activeApprovalId={activeApprovalId}
-            isStreaming={isStreaming && isLastMessage}
-            isExpanded={isExpanded}
-            isComplete={isComplete}
-          />
-        );
-      })}
-    </Box>
-  );
-});
+const MessagesList = memo(
+  function MessagesList({
+    messages,
+    activeApprovalId,
+    isStreaming,
+    isExpanded,
+  }: {
+    messages: TUIAgentUIMessage[];
+    activeApprovalId: string | null;
+    isStreaming: boolean;
+    isExpanded: boolean;
+  }) {
+    return (
+      <Box flexDirection="column">
+        {messages.map((message, index) => {
+          const isLastMessage = index === messages.length - 1;
+          const isComplete = isMessageComplete(
+            message,
+            isLastMessage,
+            isStreaming,
+          );
+          return (
+            <Message
+              key={message.id || `msg-${index}`}
+              message={message}
+              activeApprovalId={activeApprovalId}
+              isStreaming={isStreaming && isLastMessage}
+              isExpanded={isExpanded}
+              isComplete={isComplete}
+            />
+          );
+        })}
+      </Box>
+    );
+  },
+  // Custom comparison to prevent unnecessary re-renders
+  (prev, next) => {
+    // If streaming state or other props changed, re-render
+    if (
+      prev.isStreaming !== next.isStreaming ||
+      prev.isExpanded !== next.isExpanded ||
+      prev.activeApprovalId !== next.activeApprovalId
+    ) {
+      return false;
+    }
+    // Compare messages by length and IDs
+    if (prev.messages.length !== next.messages.length) {
+      return false;
+    }
+    // When not streaming, skip re-render if message IDs match
+    // (content doesn't change when not streaming)
+    if (!next.isStreaming) {
+      for (let i = 0; i < prev.messages.length; i++) {
+        if (prev.messages[i]?.id !== next.messages[i]?.id) {
+          return false;
+        }
+      }
+      return true;
+    }
+    // When streaming, allow re-render (messages are actively updating)
+    return false;
+  },
+);
 
 const ErrorDisplay = memo(function ErrorDisplay({
   error,
@@ -548,7 +586,6 @@ const StreamingStatusBar = memo(function StreamingStatusBar({
   const { getThinkingState } = useReasoningContext();
   const { isTodoVisible } = useTodoView();
   const statusText = useStatusText(messages);
-  const [, forceUpdate] = useState(0);
 
   // Get the current message ID to track thinking state
   const lastMessage = messages[messages.length - 1];
@@ -564,16 +601,8 @@ const StreamingStatusBar = memo(function StreamingStatusBar({
     [messages],
   );
 
-  // Force re-render periodically to update thinking duration while thinking
-  useEffect(() => {
-    if (thinkingState.isThinking) {
-      const timer = setInterval(() => {
-        forceUpdate((n) => n + 1);
-      }, 1000);
-      return () => clearInterval(timer);
-    }
-    return undefined;
-  }, [thinkingState.isThinking]);
+  // Note: No need for forceUpdate interval here - the StatusBar component
+  // uses the centralized AnimationProvider which handles periodic updates
 
   return (
     <StatusBar
@@ -622,28 +651,36 @@ function AppContent({ options }: AppProps) {
     openPanel,
     closePanel,
     updateSettings,
-    setSessionId,
-    resetUsage,
   } = useChatContext();
+  const { requestRemount } = useRemount();
   const { isExpanded, toggleExpanded } = useExpandedView();
   const { isTodoVisible, toggleTodoView } = useTodoView();
   const [wasInterrupted, setWasInterrupted] = useState(false);
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
   const [resumeError, setResumeError] = useState<string | null>(null);
 
-  const {
-    messages,
-    sendMessage,
-    status,
-    stop,
-    error,
-    setMessages,
-    addToolOutput,
-  } = useChat({
-    chat,
-  });
+  const { messages, sendMessage, status, stop, error, addToolOutput } = useChat(
+    {
+      chat,
+    },
+  );
 
   const isStreaming = status === "streaming" || status === "submitted";
+
+  // Stabilize messages reference to avoid unnecessary recomputation
+  // Only update the stable ref when messages actually change (by length + last ID)
+  const stableMessagesRef = useRef(messages);
+  const lastMessageId = messages[messages.length - 1]?.id;
+  const lastStableMessageId =
+    stableMessagesRef.current[stableMessagesRef.current.length - 1]?.id;
+  if (
+    messages.length !== stableMessagesRef.current.length ||
+    lastMessageId !== lastStableMessageId ||
+    isStreaming // Always update during streaming to get content changes
+  ) {
+    stableMessagesRef.current = messages;
+  }
+  const stableMessages = stableMessagesRef.current;
 
   // Static items include the header (always first) and completed messages
   // This ensures the header stays at the top when messages are moved to static
@@ -652,22 +689,23 @@ function AppContent({ options }: AppProps) {
     | { type: "message"; id: string; message: TUIAgentUIMessage };
 
   // Split messages into static (completed, rendered once) and dynamic (active, re-rendered)
-  // Static messages are those that are complete and not the last message
+  // ALL completed messages go to static to avoid re-rendering during typing
+  // Uses stableMessages to avoid recomputation when typing
   const { staticItems, dynamicMessages } = useMemo(() => {
     // Always start with the header as the first static item
     const items: StaticItem[] = [{ type: "header", id: "__header__" }];
     const dynamicMsgs: TUIAgentUIMessage[] = [];
 
-    for (let i = 0; i < messages.length; i++) {
-      const message = messages[i];
+    for (let i = 0; i < stableMessages.length; i++) {
+      const message = stableMessages[i];
       if (!message) continue;
 
-      const isLastMessage = i === messages.length - 1;
+      const isLastMessage = i === stableMessages.length - 1;
       const complete = isMessageComplete(message, isLastMessage, isStreaming);
 
-      // Messages that are complete AND not the last message go to static
-      // The last message always stays in dynamic (even if complete) for context
-      if (complete && !isLastMessage) {
+      // ALL completed messages go to static - including the last one when not streaming
+      // Only keep messages in dynamic when they're actively being updated
+      if (complete) {
         items.push({ type: "message", id: message.id, message });
       } else {
         dynamicMsgs.push(message);
@@ -675,7 +713,7 @@ function AppContent({ options }: AppProps) {
     }
 
     return { staticItems: items, dynamicMessages: dynamicMsgs };
-  }, [messages, isStreaming]);
+  }, [stableMessages, isStreaming]);
 
   // Clear interrupted state when streaming starts
   useEffect(() => {
@@ -737,9 +775,10 @@ function AppContent({ options }: AppProps) {
     }, [messages]);
 
   // Extract todos for standalone display when not streaming
+  // Uses stableMessages to avoid recomputation when typing
   const todos = useMemo(
-    () => extractTodosFromLastAssistantMessage(messages),
-    [messages],
+    () => extractTodosFromLastAssistantMessage(stableMessages),
+    [stableMessages],
   );
 
   // Get approval info for the pending tool
@@ -839,14 +878,17 @@ function AppContent({ options }: AppProps) {
           return;
         }
 
-        setMessages(sessionData.messages);
-        setSessionId(selectedSessionId);
-        closePanel();
+        // Request full remount to clear Ink's static output buffer
+        // This is the only way to properly reset the UI for a loaded session
+        requestRemount({
+          messages: sessionData.messages,
+          sessionId: selectedSessionId,
+        });
       } catch {
         setResumeError("Failed to load session");
       }
     },
-    [state.projectPath, setMessages, setSessionId, closePanel],
+    [state.projectPath, closePanel, requestRemount],
   );
 
   const handleCommandSelect = useCallback(
@@ -863,13 +905,12 @@ function AppContent({ options }: AppProps) {
           openPanel({ type: "resume" });
           break;
         case "new-chat":
-          setMessages([]);
-          setSessionId(null);
-          resetUsage();
+          // Request full remount to clear Ink's static output buffer
+          requestRemount({ messages: [], sessionId: null });
           break;
       }
     },
-    [openPanel, loadSessions, setMessages, setSessionId, resetUsage],
+    [openPanel, loadSessions, requestRemount],
   );
 
   // Memoize model options to prevent re-renders in SettingsPanel
@@ -897,132 +938,136 @@ function AppContent({ options }: AppProps) {
   // Show message list with either approval panel or input box at bottom
   // Use Ink's <Static> component for header and completed messages (rendered once, never re-rendered)
   // Dynamic messages are rendered normally and update on state changes
+  // AnimationProvider centralizes all animation timers to prevent render thrashing
   return (
-    <Box flexDirection="column" paddingLeft={1} paddingRight={1}>
-      {/* Static items: header + completed messages, rendered once by Ink's <Static> */}
-      <Static items={staticItems}>
-        {(item) => {
-          if (item.type === "header") {
+    <AnimationProvider enabled={isStreaming}>
+      <Box flexDirection="column" paddingLeft={1} paddingRight={1}>
+        {/* Static items: header + completed messages, rendered once by Ink's <Static> */}
+        <Static items={staticItems}>
+          {(item) => {
+            if (item.type === "header") {
+              return (
+                <Header
+                  key="header"
+                  name={options?.header?.name}
+                  version={options?.header?.version}
+                  model={
+                    state.settings.modelId ??
+                    options?.header?.model ??
+                    defaultModelLabel
+                  }
+                  cwd={state.workingDirectory}
+                />
+              );
+            }
             return (
-              <Header
-                key="header"
-                name={options?.header?.name}
-                version={options?.header?.version}
-                model={
-                  state.settings.modelId ??
-                  options?.header?.model ??
-                  defaultModelLabel
-                }
-                cwd={state.workingDirectory}
+              <Message
+                key={item.id}
+                message={item.message}
+                activeApprovalId={null}
+                isStreaming={false}
+                isExpanded={isExpanded}
+                isComplete={true}
               />
             );
-          }
-          return (
-            <Message
-              key={item.id}
-              message={item.message}
-              activeApprovalId={null}
-              isStreaming={false}
-              isExpanded={isExpanded}
-              isComplete={true}
-            />
-          );
-        }}
-      </Static>
+          }}
+        </Static>
 
-      {/* Dynamic messages: re-rendered on state changes */}
-      <MessagesList
-        messages={dynamicMessages}
-        activeApprovalId={activeApprovalId}
-        isStreaming={isStreaming}
-        isExpanded={isExpanded}
-      />
-
-      {wasInterrupted && !isStreaming && <InterruptedIndicator />}
-
-      <ErrorDisplay error={error} />
-
-      {/* Show settings panel when active (replaces input) */}
-      {state.activePanel.type === "model-select" && (
-        <SettingsPanel
-          title="Select model"
-          description="Choose the AI model for this session"
-          options={modelOptions}
-          currentId={state.settings.modelId ?? ""}
-          onSelect={handleModelSelect}
-          onCancel={closePanel}
+        {/* Dynamic messages: re-rendered on state changes */}
+        <MessagesList
+          messages={dynamicMessages}
+          activeApprovalId={activeApprovalId}
+          isStreaming={isStreaming}
+          isExpanded={isExpanded}
         />
-      )}
 
-      {/* Show resume panel when active (replaces input) */}
-      {state.activePanel.type === "resume" && (
-        <>
-          {resumeError && (
-            <Box marginBottom={1}>
-              <Text color="red">{resumeError}</Text>
-            </Box>
-          )}
-          <ResumePanel
-            sessions={sessions}
-            currentBranch={state.currentBranch}
-            onSelect={handleSessionSelect}
+        {wasInterrupted && !isStreaming && <InterruptedIndicator />}
+
+        <ErrorDisplay error={error} />
+
+        {/* Show settings panel when active (replaces input) */}
+        {state.activePanel.type === "model-select" && (
+          <SettingsPanel
+            title="Select model"
+            description="Choose the AI model for this session"
+            options={modelOptions}
+            currentId={state.settings.modelId ?? ""}
+            onSelect={handleModelSelect}
             onCancel={closePanel}
           />
-        </>
-      )}
+        )}
 
-      {/* Show question panel when there's a pending question (replaces input) */}
-      {state.activePanel.type === "none" &&
-      hasPendingQuestion &&
-      pendingQuestionPart &&
-      questionToolCallId ? (
-        <QuestionPanel
-          questions={pendingQuestionPart.input.questions}
-          onSubmit={handleQuestionSubmit}
-          onCancel={handleQuestionCancel}
-        />
-      ) : /* Show approval panel when there's a pending approval (replaces status bar and input) */
-      state.activePanel.type === "none" &&
-        hasPendingApproval &&
-        activeApprovalId &&
-        approvalInfo &&
-        pendingToolPart ? (
-        <ApprovalPanel
-          approvalId={activeApprovalId}
-          toolType={approvalInfo.toolType}
-          toolCommand={approvalInfo.toolCommand}
-          toolDescription={approvalInfo.toolDescription}
-          dontAskAgainPattern={approvalInfo.dontAskAgainPattern}
-          toolPart={pendingToolPart}
-        />
-      ) : state.activePanel.type === "none" ? (
-        <>
-          {/* Show streaming status bar when streaming */}
-          {isStreaming && <StreamingStatusBar messages={messages} />}
-
-          {/* Show standalone todo list when not streaming and has todos */}
-          {!isStreaming && todos && todos.length > 0 && (
-            <StandaloneTodoList todos={todos} isTodoVisible={isTodoVisible} />
-          )}
-
-          {/* Show input box (disabled when streaming) */}
-          {!isExpanded && (
-            <InputBox
-              onSubmit={handleSubmit}
-              autoAcceptMode={state.autoAcceptMode}
-              onToggleAutoAccept={cycleAutoAcceptMode}
-              onCommandSelect={handleCommandSelect}
-              disabled={isStreaming}
-              inputTokens={state.usage.inputTokens ?? 0}
-              contextLimit={state.contextLimit}
-              pasteCollapseLineThreshold={pasteCollapseLineThreshold}
+        {/* Show resume panel when active (replaces input) */}
+        {state.activePanel.type === "resume" && (
+          <>
+            {resumeError && (
+              <Box marginBottom={1}>
+                <Text color="red">{resumeError}</Text>
+              </Box>
+            )}
+            <ResumePanel
+              sessions={sessions}
+              currentBranch={state.currentBranch}
+              onSelect={handleSessionSelect}
+              onCancel={closePanel}
             />
-          )}
-        </>
-      ) : null}
+          </>
+        )}
 
-      {isExpanded && <ExpandedViewIndicator />}
-    </Box>
+        {/* Show question panel when there's a pending question (replaces input) */}
+        {state.activePanel.type === "none" &&
+        hasPendingQuestion &&
+        pendingQuestionPart &&
+        questionToolCallId ? (
+          <QuestionPanel
+            questions={pendingQuestionPart.input.questions}
+            onSubmit={handleQuestionSubmit}
+            onCancel={handleQuestionCancel}
+          />
+        ) : /* Show approval panel when there's a pending approval (replaces status bar and input) */
+        state.activePanel.type === "none" &&
+          hasPendingApproval &&
+          activeApprovalId &&
+          approvalInfo &&
+          pendingToolPart ? (
+          <ApprovalPanel
+            approvalId={activeApprovalId}
+            toolType={approvalInfo.toolType}
+            toolCommand={approvalInfo.toolCommand}
+            toolDescription={approvalInfo.toolDescription}
+            dontAskAgainPattern={approvalInfo.dontAskAgainPattern}
+            toolPart={pendingToolPart}
+          />
+        ) : state.activePanel.type === "none" ? (
+          <>
+            {/* Show streaming status bar when streaming */}
+            {isStreaming && <StreamingStatusBar messages={messages} />}
+
+            {/* Show standalone todo list when not streaming and has todos */}
+            {!isStreaming && todos && todos.length > 0 && (
+              <StandaloneTodoList todos={todos} isTodoVisible={isTodoVisible} />
+            )}
+
+            {/* Show input box (disabled when streaming) */}
+            {!isExpanded && (
+              <InputBox
+                onSubmit={handleSubmit}
+                autoAcceptMode={state.autoAcceptMode}
+                onToggleAutoAccept={cycleAutoAcceptMode}
+                onCommandSelect={handleCommandSelect}
+                disabled={isStreaming}
+                inputTokens={state.usage.inputTokens ?? 0}
+                contextLimit={state.contextLimit}
+                pasteCollapseLineThreshold={pasteCollapseLineThreshold}
+                skills={state.skills}
+              />
+            )}
+          </>
+        ) : null}
+
+        {isExpanded && <ExpandedViewIndicator />}
+      </Box>
+    </AnimationProvider>
   );
 }
 

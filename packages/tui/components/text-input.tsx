@@ -4,6 +4,7 @@ import React, {
   useCallback,
   useLayoutEffect,
   useEffect,
+  memo,
 } from "react";
 import { Text, useInput } from "ink";
 import chalk from "chalk";
@@ -147,7 +148,7 @@ function findPositionBelow(value: string, cursorOffset: number): number {
   return nextLineStart + Math.min(column, nextLineLength);
 }
 
-export function TextInput({
+export const TextInput = memo(function TextInput({
   value: externalValue,
   onChange,
   onSubmit,
@@ -578,4 +579,4 @@ export function TextInput({
         : renderedValue}
     </Text>
   );
-}
+});

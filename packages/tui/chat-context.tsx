@@ -320,13 +320,13 @@ export function ChatProvider({
     ],
   );
 
-  const cycleAutoAcceptMode = () => {
+  const cycleAutoAcceptMode = useCallback(() => {
     setAutoAcceptMode((prev) => {
       const currentIndex = AUTO_ACCEPT_MODES.indexOf(prev);
       const nextIndex = (currentIndex + 1) % AUTO_ACCEPT_MODES.length;
       return AUTO_ACCEPT_MODES[nextIndex] ?? "off";
     });
-  };
+  }, []);
 
   const updateSettings = useCallback(
     (updates: Partial<Settings>) => {
@@ -352,24 +352,38 @@ export function ChatProvider({
     setSessionUsage(DEFAULT_USAGE);
   }, []);
 
+  // Memoize the context value to prevent unnecessary consumer re-renders
+  const contextValue = useMemo(
+    () => ({
+      chat,
+      state,
+      setAutoAcceptMode,
+      cycleAutoAcceptMode,
+      addApprovalRule,
+      clearApprovalRules,
+      updateSettings,
+      openPanel,
+      closePanel,
+      setSessionId,
+      resetUsage,
+    }),
+    [
+      chat,
+      state,
+      setAutoAcceptMode,
+      cycleAutoAcceptMode,
+      addApprovalRule,
+      clearApprovalRules,
+      updateSettings,
+      openPanel,
+      closePanel,
+      setSessionId,
+      resetUsage,
+    ],
+  );
+
   return (
-    <ChatContext.Provider
-      value={{
-        chat,
-        state,
-        setAutoAcceptMode,
-        cycleAutoAcceptMode,
-        addApprovalRule,
-        clearApprovalRules,
-        updateSettings,
-        openPanel,
-        closePanel,
-        setSessionId,
-        resetUsage,
-      }}
-    >
-      {children}
-    </ChatContext.Provider>
+    <ChatContext.Provider value={contextValue}>{children}</ChatContext.Provider>
   );
 }
 

@@ -17,7 +17,7 @@ import {
   getCommandAction,
   type SlashCommandAction,
 } from "../lib/slash-commands";
-import { useChatContext } from "../chat-context";
+import type { SkillMetadata } from "@open-harness/agent";
 import {
   countLines,
   createPasteToken,
@@ -49,6 +49,7 @@ type InputBoxProps = {
   inputTokens?: number;
   contextLimit?: number;
   pasteCollapseLineThreshold?: number;
+  skills?: SkillMetadata[];
 };
 
 function getAutoAcceptLabel(mode: AutoAcceptMode): string {
@@ -125,9 +126,8 @@ export const InputBox = memo(function InputBox({
   inputTokens = 0,
   contextLimit = 0,
   pasteCollapseLineThreshold = 5,
+  skills = [],
 }: InputBoxProps) {
-  const { state } = useChatContext();
-  const skills = state.skills;
   const [value, setValue] = useState("");
   const [cursorPosition, setCursorPosition] = useState(0);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);

@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { memo, useRef } from "react";
 import { Box, Text } from "ink";
 import type { ThinkingState } from "@open-harness/shared";
 import type { TodoItem } from "@open-harness/agent";
+import { useSpinnerFrame, useTick } from "../lib/animation-context";
 
 const SILLY_WORDS = [
   "Thinking",
@@ -20,33 +21,25 @@ const SILLY_WORDS = [
   "Vibing",
   "Channeling",
 ];
-const SILLY_WORD_INTERVAL = 4000;
-const PULSE_SPEED = 100;
+const SILLY_WORD_CHANGE_SECONDS = 4;
 
 function useSillyWord() {
-  const [index, setIndex] = useState(() =>
+  const frame = useSpinnerFrame();
+  const tick = useTick();
+  // Store the initial random index once (not a function!)
+  const initialIndexRef = useRef(
     Math.floor(Math.random() * SILLY_WORDS.length),
   );
-  const [pulsePosition, setPulsePosition] = useState(0);
+
+  // Change word every SILLY_WORD_CHANGE_SECONDS
+  const wordChanges = Math.floor(tick / SILLY_WORD_CHANGE_SECONDS);
+  const index = (initialIndexRef.current + wordChanges) % SILLY_WORDS.length;
   const currentWord = SILLY_WORDS[index] ?? "Thinking";
+
+  // Pulse position: scale frame (0-9) to word length
+  // Frame cycles every 800ms, so pulse traverses word in ~800ms (original was ~1000ms)
   const wordLength = currentWord.length;
-
-  // Pulse animation - moves highlight from left to right
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setPulsePosition((prev) => (prev + 1) % (wordLength + 2));
-    }, PULSE_SPEED);
-    return () => clearInterval(timer);
-  }, [wordLength]);
-
-  // Change word at interval
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setIndex((prev) => (prev + 1) % SILLY_WORDS.length);
-      setPulsePosition(0);
-    }, SILLY_WORD_INTERVAL);
-    return () => clearInterval(timer);
-  }, []);
+  const pulsePosition = Math.floor((frame / 10) * (wordLength + 2));
 
   return { word: currentWord, pulsePosition };
 }
@@ -167,7 +160,7 @@ function getTodoColor(status: TodoItem["status"]): string {
   }
 }
 
-function TodoList({ todos }: { todos: TodoItem[] }) {
+const TodoList = memo(function TodoList({ todos }: { todos: TodoItem[] }) {
   return (
     <Box flexDirection="column" marginLeft={2}>
       {todos.map((todo) => (
@@ -184,10 +177,10 @@ function TodoList({ todos }: { todos: TodoItem[] }) {
       ))}
     </Box>
   );
-}
+});
 
 // Standalone todo list for when not streaming
-export function StandaloneTodoList({
+export const StandaloneTodoList = memo(function StandaloneTodoList({
   todos,
   isTodoVisible,
 }: {
@@ -209,10 +202,11 @@ export function StandaloneTodoList({
       <TodoList todos={todos} />
     </Box>
   );
-}
+});
 
-// Not memoized to allow animation
-export function StatusBar({
+// Memoized to prevent parent re-renders from cascading
+// Animation still works because StatusIndicator uses animation hooks internally
+export const StatusBar = memo(function StatusBar({
   isStreaming,
   status,
   thinkingState,
@@ -247,4 +241,4 @@ export function StatusBar({
       {showTodos && <TodoList todos={todos} />}
     </Box>
   );
-}
+});

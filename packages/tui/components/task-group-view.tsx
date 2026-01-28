@@ -1,38 +1,29 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { memo } from "react";
 import { Box, Text } from "ink";
 import { getToolName, isToolUIPart } from "ai";
 import type { TaskToolUIPart, SubagentUIMessage } from "@open-harness/agent";
 import { formatTokens } from "@open-harness/shared";
+import {
+  useSpinnerFrame,
+  useTick,
+  useElapsedTime,
+} from "../lib/animation-context";
 
 type SubagentMessagePart = SubagentUIMessage["parts"][number];
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-function TaskSpinner() {
-  const [frame, setFrame] = useState(0);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setFrame((prev) => (prev + 1) % SPINNER_FRAMES.length);
-    }, 80);
-    return () => clearInterval(timer);
-  }, []);
-
+const TaskSpinner = memo(function TaskSpinner() {
+  const frame = useSpinnerFrame();
   return <Text color="gray">{SPINNER_FRAMES[frame]}</Text>;
-}
+});
 
-function FlashingDot() {
-  const [visible, setVisible] = useState(true);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setVisible((prev) => !prev);
-    }, 500);
-    return () => clearInterval(timer);
-  }, []);
-
+const FlashingDot = memo(function FlashingDot() {
+  const tick = useTick();
+  // Toggle every second based on tick parity
+  const visible = tick % 2 === 0;
   return <Text color="gray">{visible ? "●" : " "}</Text>;
-}
+});
 
 function formatTime(seconds: number): string {
   if (seconds < 60) {
@@ -41,33 +32,6 @@ function formatTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
   return `${mins}m ${secs}s`;
-}
-
-function useTaskTiming(isRunning: boolean) {
-  const startTimeRef = useRef<number | null>(null);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-
-  useEffect(() => {
-    if (isRunning && !startTimeRef.current) {
-      startTimeRef.current = Date.now();
-    }
-
-    if (!isRunning) {
-      return;
-    }
-
-    const interval = setInterval(() => {
-      if (startTimeRef.current) {
-        setElapsedSeconds(
-          Math.floor((Date.now() - startTimeRef.current) / 1000),
-        );
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [isRunning]);
-
-  return elapsedSeconds;
 }
 
 type TaskStatus =
@@ -152,7 +116,11 @@ function getLastToolInfo(
   return { name: displayName, summary };
 }
 
-function TaskStatusIndicator({ status }: { status: TaskStatus }) {
+const TaskStatusIndicator = memo(function TaskStatusIndicator({
+  status,
+}: {
+  status: TaskStatus;
+}) {
   switch (status) {
     case "running":
       return <TaskSpinner />;
@@ -171,9 +139,9 @@ function TaskStatusIndicator({ status }: { status: TaskStatus }) {
     default:
       return <Text color="gray">●</Text>;
   }
-}
+});
 
-function TaskItem({
+const TaskItem = memo(function TaskItem({
   part,
   isLast,
   isStreaming,
@@ -184,7 +152,7 @@ function TaskItem({
 }) {
   const status = getTaskStatus(part, isStreaming);
   const isRunning = status === "running" || status === "pending";
-  const elapsedSeconds = useTaskTiming(isRunning);
+  const elapsedSeconds = useElapsedTime(isRunning);
   const toolCount = countTaskTools(part);
   const tokenCount = getTaskTokens(part);
   const lastTool = getLastToolInfo(part);
@@ -260,14 +228,17 @@ function TaskItem({
       )}
     </Box>
   );
-}
+});
 
 type TaskGroupViewProps = {
   taskParts: TaskToolUIPart[];
   isStreaming: boolean;
 };
 
-export function TaskGroupView({ taskParts, isStreaming }: TaskGroupViewProps) {
+export const TaskGroupView = memo(function TaskGroupView({
+  taskParts,
+  isStreaming,
+}: TaskGroupViewProps) {
   if (taskParts.length === 0) return null;
 
   // Count different states
@@ -331,4 +302,4 @@ export function TaskGroupView({ taskParts, isStreaming }: TaskGroupViewProps) {
       </Box>
     </Box>
   );
-}
+});

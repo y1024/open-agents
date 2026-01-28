@@ -1,31 +1,25 @@
 /**
  * Shared components and utilities for tool renderers.
  */
-import React, { useState, useEffect, type ReactNode } from "react";
+import React, { memo, type ReactNode } from "react";
 import { Box, Text } from "ink";
 import type { DiffLine, CodeLine } from "@open-harness/shared";
 import type { ToolRenderState } from "../../lib/render-tool";
+import { useSpinnerFrame } from "../../lib/animation-context";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-export function ToolSpinner() {
-  const [frame, setFrame] = useState(0);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setFrame((prev) => (prev + 1) % SPINNER_FRAMES.length);
-    }, 80);
-    return () => clearInterval(timer);
-  }, []);
-
+export const ToolSpinner = memo(function ToolSpinner() {
+  const frame = useSpinnerFrame();
   return <Text color="yellow">{SPINNER_FRAMES[frame]} </Text>;
-}
+});
 
 /**
  * Get the dot color based on tool state.
  */
 export function getDotColor(state: ToolRenderState): string {
   if (state.denied) return "red";
+  if (state.interrupted) return "red";
   if (state.approvalRequested) return "yellow";
   if (state.running) return "yellow";
   if (state.error) return "red";
@@ -48,10 +42,12 @@ export function ToolLayout({
 }) {
   const dotColor = getDotColor(state);
 
+  const showSpinner = state.running && !state.interrupted;
+
   return (
     <Box flexDirection="column" marginTop={1} marginBottom={1}>
       <Box>
-        {state.running ? <ToolSpinner /> : <Text color={dotColor}>● </Text>}
+        {showSpinner ? <ToolSpinner /> : <Text color={dotColor}>● </Text>}
         <Text bold color={state.denied ? "red" : "white"}>
           {name}
         </Text>
@@ -70,7 +66,14 @@ export function ToolLayout({
         </Box>
       )}
 
-      {output && !state.approvalRequested && (
+      {state.interrupted && (
+        <Box paddingLeft={2}>
+          <Text color="gray">└ </Text>
+          <Text color="red">Interrupted</Text>
+        </Box>
+      )}
+
+      {output && !state.approvalRequested && !state.interrupted && (
         <Box paddingLeft={2}>
           <Text color="gray">└ </Text>
           {output}
@@ -116,15 +119,16 @@ export function FileChangeLayout({
 }) {
   const dotColor = getDotColor(state);
   const maxWidth = 80;
+  const showSpinner = state.running && !state.interrupted;
   const showDiff =
     state.approvalRequested ||
-    (!state.running && !state.error && !state.denied);
+    (!state.running && !state.error && !state.denied && !state.interrupted);
 
   return (
     <Box flexDirection="column" marginTop={1} marginBottom={1}>
       {/* Header: ● Update(src/tui/lib/markdown.ts) */}
       <Box>
-        {state.running ? <ToolSpinner /> : <Text color={dotColor}>● </Text>}
+        {showSpinner ? <ToolSpinner /> : <Text color={dotColor}>● </Text>}
         <Text bold color="white">
           {action}
         </Text>
@@ -140,6 +144,13 @@ export function FileChangeLayout({
           <Text color="gray">
             {state.isActiveApproval ? "Running…" : "Waiting…"}
           </Text>
+        </Box>
+      )}
+
+      {state.interrupted && (
+        <Box paddingLeft={2}>
+          <Text color="gray">└ </Text>
+          <Text color="red">Interrupted</Text>
         </Box>
       )}
 
@@ -243,15 +254,16 @@ export function NewFileLayout({
   state: ToolRenderState;
 }) {
   const dotColor = getDotColor(state);
+  const showSpinner = state.running && !state.interrupted;
   const showCode =
     state.approvalRequested ||
-    (!state.running && !state.error && !state.denied);
+    (!state.running && !state.error && !state.denied && !state.interrupted);
 
   return (
     <Box flexDirection="column" marginTop={1} marginBottom={1}>
       {/* Header: ● Create(src/file.ts) */}
       <Box>
-        {state.running ? <ToolSpinner /> : <Text color={dotColor}>● </Text>}
+        {showSpinner ? <ToolSpinner /> : <Text color={dotColor}>● </Text>}
         <Text bold color="white">
           Create
         </Text>
@@ -267,6 +279,13 @@ export function NewFileLayout({
           <Text color="gray">
             {state.isActiveApproval ? "Running…" : "Waiting…"}
           </Text>
+        </Box>
+      )}
+
+      {state.interrupted && (
+        <Box paddingLeft={2}>
+          <Text color="gray">└ </Text>
+          <Text color="red">Interrupted</Text>
         </Box>
       )}
 
