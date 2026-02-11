@@ -1,8 +1,14 @@
-import { discoverSkills, gateway } from "@open-harness/agent";
+import {
+  collectTaskToolUsageEvents,
+  discoverSkills,
+  gateway,
+  sumLanguageModelUsage,
+} from "@open-harness/agent";
 import { connectSandbox, type SandboxState } from "@open-harness/sandbox";
 import {
   convertToModelMessages,
   type GatewayModelId,
+  type LanguageModel,
   type LanguageModelUsage,
 } from "ai";
 import { nanoid } from "nanoid";
@@ -19,6 +25,7 @@ import {
   updateSession,
   upsertChatMessageScoped,
 } from "@/lib/db/sessions";
+import { recordUsage } from "@/lib/db/usage";
 import { getRepoToken } from "@/lib/github/get-repo-token";
 import { getUserGitHubToken } from "@/lib/github/user-token";
 import { DEFAULT_MODEL_ID } from "@/lib/models";
@@ -28,6 +35,9 @@ import { kickSandboxLifecycleWorkflow } from "@/lib/sandbox/lifecycle-kick";
 import { isSandboxActive } from "@/lib/sandbox/utils";
 import { getServerSession } from "@/lib/session/get-server-session";
 import { onStopSignal } from "@/lib/stop-signal";
+
+const cachedInputTokensFor = (usage: LanguageModelUsage) =>
+  usage.inputTokenDetails?.cacheReadTokens ?? usage.cachedInputTokens ?? 0;
 
 interface ChatRequestBody {
   messages: WebAgentUIMessage[];
@@ -323,6 +333,7 @@ export async function POST(req: Request) {
 
   // Track last step usage for message metadata
   let lastStepUsage: LanguageModelUsage | undefined;
+  let totalMessageUsage: LanguageModelUsage | undefined;
 
   // Save assistant message on finish, and persist sandbox state if applicable
   return result.toUIMessageStreamResponse({
@@ -337,6 +348,7 @@ export async function POST(req: Request) {
       }
       // On finish, include both the last step usage and total message usage
       if (part.type === "finish") {
+        totalMessageUsage = part.totalUsage;
         return { lastStepUsage, totalMessageUsage: part.totalUsage };
       }
       return undefined;
@@ -410,6 +422,7 @@ export async function POST(req: Request) {
         if (sandbox.getState) {
           try {
             const currentState = sandbox.getState() as SandboxState;
+            let sandboxStateToPersist = currentState;
 
             // For hybrid sandboxes in pre-handoff state (has files, no sandboxId),
             // check if background work has already set a sandboxId we should preserve
@@ -425,7 +438,7 @@ export async function POST(req: Request) {
               ) {
                 // Background work has completed - use the sandboxId from DB
                 // but also include pending operations from this session
-                const mergedHybridState: SandboxState = {
+                sandboxStateToPersist = {
                   type: "hybrid",
                   sandboxId: currentSession.sandboxState.sandboxId,
                   pendingOperations:
@@ -433,24 +446,14 @@ export async function POST(req: Request) {
                       ? currentState.pendingOperations
                       : undefined,
                 };
-                await updateSession(sessionId, {
-                  sandboxState: mergedHybridState,
-                  ...buildActiveLifecycleUpdate(mergedHybridState, {
-                    activityAt,
-                  }),
-                });
-
-                kickSandboxLifecycleWorkflow({
-                  sessionId,
-                  reason: "chat-finished",
-                });
-                return;
               }
             }
 
             await updateSession(sessionId, {
-              sandboxState: currentState,
-              ...buildActiveLifecycleUpdate(currentState, { activityAt }),
+              sandboxState: sandboxStateToPersist,
+              ...buildActiveLifecycleUpdate(sandboxStateToPersist, {
+                activityAt,
+              }),
             });
 
             kickSandboxLifecycleWorkflow({
@@ -473,6 +476,53 @@ export async function POST(req: Request) {
               );
             }
           }
+        }
+
+        const postUsage = (
+          usage: LanguageModelUsage,
+          usageModel: LanguageModel | string,
+          agentType: "main" | "subagent",
+          messages: WebAgentUIMessage[] = [],
+        ) => {
+          void recordUsage(session.user.id, {
+            source: "web",
+            agentType,
+            model: usageModel,
+            messages,
+            usage: {
+              inputTokens: usage.inputTokens ?? 0,
+              cachedInputTokens: cachedInputTokensFor(usage),
+              outputTokens: usage.outputTokens ?? 0,
+            },
+          }).catch((e) => console.error("Failed to record usage:", e));
+        };
+
+        if (totalMessageUsage) {
+          postUsage(totalMessageUsage, model, "main", [responseMessage]);
+        }
+
+        const subagentUsageEvents = collectTaskToolUsageEvents(responseMessage);
+        if (subagentUsageEvents.length === 0) {
+          return;
+        }
+
+        const defaultModelId =
+          typeof model === "string" ? model : model.modelId;
+        const subagentUsageByModel = new Map<string, LanguageModelUsage>();
+        for (const event of subagentUsageEvents) {
+          const eventModelId = event.modelId ?? defaultModelId;
+          if (!eventModelId) {
+            continue;
+          }
+          const existing = subagentUsageByModel.get(eventModelId);
+          const combined = sumLanguageModelUsage(existing, event.usage);
+          if (combined) {
+            subagentUsageByModel.set(eventModelId, combined);
+          }
+        }
+
+        for (const [eventModelId, usage] of subagentUsageByModel) {
+          postUsage(usage, eventModelId, "subagent");
         }
       }
     },

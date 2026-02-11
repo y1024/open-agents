@@ -1,22 +1,30 @@
 import {
-  generateId,
+  collectTaskToolUsageEvents,
+  defaultModelLabel,
+  type GatewayConfig,
+  sumLanguageModelUsage,
+} from "@open-harness/agent";
+import {
   type ChatTransport,
-  type LanguageModelUsage,
   convertToModelMessages,
-  smoothStream,
+  generateId,
+  type LanguageModelUsage,
   pruneMessages,
+  smoothStream,
 } from "ai";
-import { defaultModelLabel, type GatewayConfig } from "@open-harness/agent";
+import { getModelById } from "./lib/models";
+import { createSession, saveSession } from "./lib/session-storage";
+import type { Settings } from "./lib/settings";
 import type {
+  ApprovalRule,
+  AutoAcceptMode,
   TUIAgent,
   TUIAgentCallOptions,
   TUIAgentUIMessage,
-  AutoAcceptMode,
-  ApprovalRule,
 } from "./types";
-import type { Settings } from "./lib/settings";
-import { getModelById } from "./lib/models";
-import { createSession, saveSession } from "./lib/session-storage";
+
+const cachedInputTokensFor = (usage: LanguageModelUsage) =>
+  usage.inputTokenDetails?.cacheReadTokens ?? usage.cachedInputTokens ?? 0;
 
 export type PersistenceConfig = {
   getSessionId: () => string | null;
@@ -114,6 +122,7 @@ export function createAgentTransport({
       let currentSessionId = persistence?.getSessionId() ?? null;
       // Track last step usage for message metadata
       let lastStepUsage: LanguageModelUsage | undefined;
+      let totalMessageUsage: LanguageModelUsage | undefined;
 
       return result.toUIMessageStream<TUIAgentUIMessage>({
         originalMessages: messages,
@@ -127,34 +136,101 @@ export function createAgentTransport({
           }
           // On finish, include both the last step usage and total message usage
           if (part.type === "finish") {
+            totalMessageUsage = part.totalUsage;
             return { lastStepUsage, totalMessageUsage: part.totalUsage };
           }
         },
         onFinish: async ({ messages: allMessages }) => {
-          if (!persistence) return;
+          if (persistence) {
+            try {
+              // Get current branch at save time
+              const branch = persistence.getBranch();
 
-          try {
-            // Get current branch at save time
-            const branch = persistence.getBranch();
+              // Create session if needed
+              if (!currentSessionId) {
+                currentSessionId = await createSession(
+                  persistence.projectPath,
+                  branch,
+                );
+                persistence.onSessionCreated(currentSessionId);
+              }
 
-            // Create session if needed
-            if (!currentSessionId) {
-              currentSessionId = await createSession(
+              // Save all messages (overwrites file)
+              await saveSession(
                 persistence.projectPath,
+                currentSessionId,
                 branch,
+                allMessages,
               );
-              persistence.onSessionCreated(currentSessionId);
+            } catch {
+              // Ignore persistence errors
             }
+          }
 
-            // Save all messages (overwrites file)
-            await saveSession(
-              persistence.projectPath,
-              currentSessionId,
-              branch,
-              allMessages,
+          // Report usage to web app when connected via gateway
+          if (!gatewayConfig) {
+            return;
+          }
+
+          const lastAssistantMessage = allMessages
+            .filter((m) => m.role === "assistant")
+            .at(-1);
+          const baseUrl = gatewayConfig.baseURL.replace(/\/api\/ai-proxy$/, "");
+          const postUsage = (
+            usage: LanguageModelUsage,
+            usageModelId: string,
+            agentType: "main" | "subagent",
+            messages: TUIAgentUIMessage[] = [],
+          ) => {
+            void fetch(`${baseUrl}/api/usage`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${gatewayConfig.apiKey}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                messages,
+                usage: {
+                  inputTokens: usage.inputTokens ?? 0,
+                  cachedInputTokens: cachedInputTokensFor(usage),
+                  outputTokens: usage.outputTokens ?? 0,
+                },
+                modelId: usageModelId,
+                agentType,
+              }),
+            }).catch(() => {});
+          };
+
+          if (totalMessageUsage) {
+            postUsage(
+              totalMessageUsage,
+              modelId,
+              "main",
+              lastAssistantMessage ? [lastAssistantMessage] : [],
             );
-          } catch {
-            // Ignore persistence errors
+          }
+
+          if (!lastAssistantMessage) {
+            return;
+          }
+
+          const subagentUsageEvents =
+            collectTaskToolUsageEvents(lastAssistantMessage);
+          if (subagentUsageEvents.length === 0) {
+            return;
+          }
+          const subagentUsageByModel = new Map<string, LanguageModelUsage>();
+          for (const event of subagentUsageEvents) {
+            const eventModelId = event.modelId ?? modelId;
+            const existing = subagentUsageByModel.get(eventModelId);
+            const combined = sumLanguageModelUsage(existing, event.usage);
+            if (combined) {
+              subagentUsageByModel.set(eventModelId, combined);
+            }
+          }
+
+          for (const [eventModelId, usage] of subagentUsageByModel) {
+            postUsage(usage, eventModelId, "subagent");
           }
         },
       });
