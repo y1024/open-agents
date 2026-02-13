@@ -45,5 +45,5 @@
     "@opentui/core-linux-x64": "^0.1.75",
     "@opentui/core-win32-x64": "^0.1.75"
   },
-  "packageManager": "bun@1.2.14",
+  "packageManager": "bun@1.2.14"
 }
