@@ -1,5 +1,4 @@
 import {
-  readUIMessageStream,
   type FinishReason,
   type LanguageModelUsage,
   type ModelMessage,
@@ -42,7 +41,7 @@ export async function runDurableChatWorkflow(
     responseMessage = result.responseMessage;
     totalMessageUsage = result.totalMessageUsage;
 
-    if (result.finishReason !== "tool-calls") {
+    if (!result.shouldContinue) {
       break;
     }
   }
@@ -64,6 +63,8 @@ async function runChatStep(
 
   const { webAgent } = await import("@/app/config");
 
+  let responseMessage: UIMessage | null = null;
+  let streamFinishReason: FinishReason | undefined;
   let lastStepUsage: LanguageModelUsage | undefined;
   let totalMessageUsage: LanguageModelUsage | undefined;
 
@@ -76,6 +77,10 @@ async function runChatStep(
   });
 
   const stream = result.toUIMessageStream<UIMessage>({
+    onFinish: ({ responseMessage: finishedMessage, finishReason }) => {
+      responseMessage = finishedMessage;
+      streamFinishReason = finishReason;
+    },
     messageMetadata: ({ part }) => {
       if (part.type === "finish-step") {
         lastStepUsage = part.usage;
@@ -91,8 +96,7 @@ async function runChatStep(
     },
   });
 
-  const [streamForWritable, streamForMessage] = stream.tee();
-  const reader = streamForWritable.getReader();
+  const reader = stream.getReader();
   const writer = writable.getWriter();
 
   try {
@@ -101,6 +105,7 @@ async function runChatStep(
       if (done) {
         break;
       }
+
       await writer.write(value);
     }
   } finally {
@@ -108,22 +113,27 @@ async function runChatStep(
     writer.releaseLock();
   }
 
-  let responseMessage: UIMessage | null = null;
-  for await (const message of readUIMessageStream<UIMessage>({
-    stream: streamForMessage,
-  })) {
-    responseMessage = message;
-  }
-
   const response = await result.response;
-  const finishReason = (await result.finishReason) as FinishReason;
+  const finishReason =
+    streamFinishReason ?? ((await result.finishReason) as FinishReason);
 
   return {
     responseMessage,
     responseMessages: response.messages,
-    finishReason,
+    shouldContinue:
+      finishReason === "tool-calls" && hasToolCallInMessages(response.messages),
     totalMessageUsage,
   };
+}
+
+function hasToolCallInMessages(messages: ModelMessage[]): boolean {
+  return messages.some((message) => {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      return false;
+    }
+
+    return message.content.some((part) => part.type === "tool-call");
+  });
 }
 
 async function closeStream(writable: WritableStream<UIMessageChunk>) {
