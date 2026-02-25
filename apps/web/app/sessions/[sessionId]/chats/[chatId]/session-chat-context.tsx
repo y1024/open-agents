@@ -101,11 +101,6 @@ export type LifecycleTimingInfo = {
 
 export type SandboxStatusSyncResult = "active" | "no_sandbox" | "unknown";
 
-type RetryChatStreamOptions = {
-  auto?: boolean;
-  strategy?: "hard" | "soft";
-};
-
 function toMs(value: Date | null | undefined): number | null {
   return value ? value.getTime() : null;
 }
@@ -186,8 +181,6 @@ type SessionChatContextValue = {
   syncSandboxStatus: () => Promise<SandboxStatusSyncResult>;
   /** Attempt to reconnect to an existing sandbox */
   attemptReconnection: () => Promise<ReconnectionStatus>;
-  /** Clear a transient chat error and attempt to resume an active stream */
-  retryChatStream: (opts?: RetryChatStreamOptions) => void;
   /** Update session repo info after creating a repo */
   updateSessionRepo: (info: {
     cloneUrl: string;
@@ -296,18 +289,13 @@ export function SessionChatProvider({
           headers,
           credentials,
         }),
-        prepareReconnectToStreamRequest: async ({ headers, credentials }) => ({
-          api: `/api/chat/${chatInfo.id}/stream`,
-          headers,
-          credentials,
-        }),
       }),
     [sessionRecord.id, chatInfo.id],
   );
 
   const hadInitialMessages = initialMessages.length > 0;
 
-  const { instance: chatInstance, alreadyExisted } = useMemo(
+  const { instance: chatInstance } = useMemo(
     () =>
       getOrCreateChatInstance(chatInfo.id, {
         id: chatInfo.id,
@@ -319,78 +307,15 @@ export function SessionChatProvider({
     [chatInfo.id],
   );
 
-  // Track explicit user-initiated stops so auto-recovery doesn't immediately
-  // reconnect to the still-running server stream (the main cause of the
-  // "need to tap stop 3 times on iOS" bug).
-  const userStoppedRef = useRef(false);
-
   const stopChatStream = useCallback(() => {
-    userStoppedRef.current = true;
     void chatInstance.stop();
     abortChatInstanceTransport(chatInfo.id);
   }, [chatInfo.id, chatInstance]);
 
-  // Compute resume only once on mount. If this tracks `chatInstance.status`
-  // reactively, transient ready/submitted transitions during tool loops can
-  // retrigger `resumeStream()` and replay recent chunks on top of the live
-  // stream, causing visible jank.
-  const shouldResumeOnMountRef = useRef(
-    !!initialChat.activeStreamId &&
-      (!alreadyExisted ||
-        chatInstance.status === "ready" ||
-        chatInstance.status === "error"),
-  );
-
   const chat = useChat<WebAgentUIMessage>({
     chat: chatInstance,
-    resume: shouldResumeOnMountRef.current,
     experimental_throttle: CHAT_UI_UPDATE_THROTTLE_MS,
   });
-
-  /**
-   * Clear a transient chat error (e.g. iOS "Load failed") and attempt to
-   * resume the server-side stream if one is still active.
-   *
-   * When called from a manual "Retry" button we always want to reconnect, so
-   * the stopped flag is reset.  When called from the automatic
-   * visibility-change / online recovery handler, the flag is checked first so
-   * that a user-initiated stop is respected and the stream is not silently
-   * restarted.
-   */
-  const retryChatStream = useCallback(
-    (opts?: RetryChatStreamOptions) => {
-      const strategy = opts?.strategy ?? "hard";
-      // If the user explicitly stopped the stream, don't auto-reconnect.
-      // This prevents the "tap stop 3 times" loop on iOS where aborting the
-      // transport causes a transient error that the auto-recovery immediately
-      // reconnects.
-      if (opts?.auto && userStoppedRef.current) {
-        // Still clear the error so the UI doesn't show a stale error banner.
-        chat.clearError();
-        return;
-      }
-      // Manual retry — reset the flag so the stream can proceed.
-      userStoppedRef.current = false;
-      if (strategy === "hard") {
-        // Tear down any stale local fetch before reconnecting.
-        void chatInstance.stop();
-        abortChatInstanceTransport(chatInfo.id);
-      }
-      // Clear the error so the chat UI becomes visible again.
-      chat.clearError();
-      // If the server-side stream is still running, reconnect to it.
-      void chat.resumeStream();
-    },
-    [chat, chatInfo.id, chatInstance],
-  );
-
-  // Reset the user-stopped flag when a new message is sent so that
-  // auto-recovery works normally for the new stream.
-  useEffect(() => {
-    if (chat.status === "submitted") {
-      userStoppedRef.current = false;
-    }
-  }, [chat.status]);
 
   // Cleanup: always release chat instances when leaving a route.
   // If this chat is still streaming or submitted, stop local stream processing
@@ -400,9 +325,7 @@ export function SessionChatProvider({
   // (the POST hasn't started returning data yet). Without stopping in this
   // state, the Chat instance's internal state machine is never reset, which
   // can leave the UI stuck showing a "Thinking..." indicator on re-entry.
-  // Also abort the instance transport fetch connections. reconnectToStream
-  // does not pass an abort signal, so chatInstance.stop() alone cannot cancel
-  // resumed streams.
+  // Also abort any in-flight transport fetch connection for this chat.
   useEffect(() => {
     return () => {
       if (
@@ -1058,7 +981,6 @@ export function SessionChatProvider({
       chatInfo,
       chat,
       stopChatStream,
-      retryChatStream,
       sandboxInfo,
       setSandboxInfo,
       clearSandboxInfo,
@@ -1107,7 +1029,6 @@ export function SessionChatProvider({
       chatInfo,
       chat,
       stopChatStream,
-      retryChatStream,
       sandboxInfo,
       setSandboxInfo,
       clearSandboxInfo,

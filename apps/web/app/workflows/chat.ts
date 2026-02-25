@@ -21,6 +21,45 @@ export interface ChatWorkflowResult {
   totalMessageUsage?: LanguageModelUsage;
 }
 
+interface ChatStepResult {
+  responseMessage: UIMessage | null;
+  responseMessages: ModelMessage[];
+  finishReason: string;
+  stepUsage?: LanguageModelUsage;
+}
+
+function addUsage(
+  existing: LanguageModelUsage | undefined,
+  next: LanguageModelUsage,
+): LanguageModelUsage {
+  const merged: LanguageModelUsage = {
+    ...next,
+    inputTokens: (existing?.inputTokens ?? 0) + (next.inputTokens ?? 0),
+    outputTokens: (existing?.outputTokens ?? 0) + (next.outputTokens ?? 0),
+  };
+
+  if (existing?.totalTokens != null || next.totalTokens != null) {
+    merged.totalTokens = (existing?.totalTokens ?? 0) + (next.totalTokens ?? 0);
+  }
+
+  if (existing?.cachedInputTokens != null || next.cachedInputTokens != null) {
+    merged.cachedInputTokens =
+      (existing?.cachedInputTokens ?? 0) + (next.cachedInputTokens ?? 0);
+  }
+
+  if (existing?.inputTokenDetails || next.inputTokenDetails) {
+    merged.inputTokenDetails = {
+      ...existing?.inputTokenDetails,
+      ...next.inputTokenDetails,
+      cacheReadTokens:
+        (existing?.inputTokenDetails?.cacheReadTokens ?? 0) +
+        (next.inputTokenDetails?.cacheReadTokens ?? 0),
+    };
+  }
+
+  return merged;
+}
+
 export async function runDurableChatWorkflow(
   messages: ModelMessage[],
   options: DurableAgentCallOptions,
@@ -28,18 +67,43 @@ export async function runDurableChatWorkflow(
   "use workflow";
 
   const writable = getWritable<UIMessageChunk>();
-  const result = await runChatStep(messages, writable, options);
+  const maxIterations = 10;
+
+  let modelMessages = messages;
+  let responseMessage: UIMessage | null = null;
+  let totalMessageUsage: LanguageModelUsage | undefined;
+
+  for (let i = 0; i < maxIterations; i += 1) {
+    const stepResult = await runChatStep(modelMessages, writable, options);
+
+    modelMessages = [...modelMessages, ...stepResult.responseMessages];
+
+    if (stepResult.responseMessage) {
+      responseMessage = stepResult.responseMessage;
+    }
+
+    if (stepResult.stepUsage) {
+      totalMessageUsage = addUsage(totalMessageUsage, stepResult.stepUsage);
+    }
+
+    if (stepResult.finishReason !== "tool-calls") {
+      break;
+    }
+  }
 
   await closeStream(writable);
 
-  return result;
+  return {
+    responseMessage,
+    totalMessageUsage,
+  };
 }
 
 async function runChatStep(
   messages: ModelMessage[],
   writable: WritableStream<UIMessageChunk>,
   callOptions: DurableAgentCallOptions,
-): Promise<ChatWorkflowResult> {
+): Promise<ChatStepResult> {
   "use step";
 
   const { webAgent } = await import("@/app/config");
@@ -77,16 +141,23 @@ async function runChatStep(
     writer.releaseLock();
   }
 
-  let totalMessageUsage: LanguageModelUsage | undefined;
+  const [response, finishReason] = await Promise.all([
+    result.response,
+    result.finishReason,
+  ]);
+
+  let stepUsage: LanguageModelUsage | undefined;
   try {
-    totalMessageUsage = await result.usage;
+    stepUsage = await result.usage;
   } catch (error) {
     console.error("Failed to read durable chat usage:", error);
   }
 
   return {
     responseMessage,
-    totalMessageUsage,
+    responseMessages: response.messages as ModelMessage[],
+    finishReason,
+    stepUsage,
   };
 }
 
