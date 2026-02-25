@@ -953,11 +953,18 @@ export function SessionChatContent() {
   const [copiedAssistantMessageKey, setCopiedAssistantMessageKey] = useState<
     string | null
   >(null);
+  const [
+    isLatestAssistantCopyButtonVisible,
+    setIsLatestAssistantCopyButtonVisible,
+  ] = useState(true);
   const lastStatusSyncAtRef = useRef(0);
   const statusSyncInFlightRef = useRef(false);
   const pendingOptimisticTitleChatIdRef = useRef<string | null>(null);
   const hasSetOptimisticTitleRef = useRef(false);
   const assistantCopyResetTimeoutRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  const latestAssistantCopyButtonTimeoutRef = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
   const markReadRef = useRef<{
@@ -979,8 +986,42 @@ export function SessionChatContent() {
         clearTimeout(assistantCopyResetTimeoutRef.current);
         assistantCopyResetTimeoutRef.current = null;
       }
+
+      if (latestAssistantCopyButtonTimeoutRef.current) {
+        clearTimeout(latestAssistantCopyButtonTimeoutRef.current);
+        latestAssistantCopyButtonTimeoutRef.current = null;
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (latestAssistantCopyButtonTimeoutRef.current) {
+      clearTimeout(latestAssistantCopyButtonTimeoutRef.current);
+      latestAssistantCopyButtonTimeoutRef.current = null;
+    }
+
+    if (lastMessage?.role !== "assistant") {
+      setIsLatestAssistantCopyButtonVisible(true);
+      return;
+    }
+
+    if (isChatInFlightSettled) {
+      setIsLatestAssistantCopyButtonVisible(false);
+      return;
+    }
+
+    latestAssistantCopyButtonTimeoutRef.current = setTimeout(() => {
+      setIsLatestAssistantCopyButtonVisible(true);
+      latestAssistantCopyButtonTimeoutRef.current = null;
+    }, STREAMDOWN_FADE_IN_ANIMATION.duration);
+
+    return () => {
+      if (latestAssistantCopyButtonTimeoutRef.current) {
+        clearTimeout(latestAssistantCopyButtonTimeoutRef.current);
+        latestAssistantCopyButtonTimeoutRef.current = null;
+      }
+    };
+  }, [isChatInFlightSettled, lastMessage?.id, lastMessage?.role]);
 
   const copyAssistantMessageText = useCallback(
     async (copyKey: string, text: string) => {
@@ -2292,31 +2333,33 @@ export function SessionChatContent() {
                                 >
                                   {p.text}
                                 </Streamdown>
-                                {!isMessageStreaming && (
-                                  <div>
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon"
-                                      className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                                      onClick={() =>
-                                        void copyAssistantMessageText(
-                                          `${m.id}-${group.renderKey}`,
-                                          p.text,
-                                        )
-                                      }
-                                      disabled={p.text.trim().length === 0}
-                                      aria-label="Copy assistant message"
-                                    >
-                                      {copiedAssistantMessageKey ===
-                                      `${m.id}-${group.renderKey}` ? (
-                                        <Check className="h-3.5 w-3.5" />
-                                      ) : (
-                                        <Copy className="h-3.5 w-3.5" />
-                                      )}
-                                    </Button>
-                                  </div>
-                                )}
+                                {!isMessageStreaming &&
+                                  (m.id !== lastMessage?.id ||
+                                    isLatestAssistantCopyButtonVisible) && (
+                                    <div>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                                        onClick={() =>
+                                          void copyAssistantMessageText(
+                                            `${m.id}-${group.renderKey}`,
+                                            p.text,
+                                          )
+                                        }
+                                        disabled={p.text.trim().length === 0}
+                                        aria-label="Copy assistant message"
+                                      >
+                                        {copiedAssistantMessageKey ===
+                                        `${m.id}-${group.renderKey}` ? (
+                                          <Check className="h-3.5 w-3.5" />
+                                        ) : (
+                                          <Copy className="h-3.5 w-3.5" />
+                                        )}
+                                      </Button>
+                                    </div>
+                                  )}
                               </div>
                             </div>
                           )}
