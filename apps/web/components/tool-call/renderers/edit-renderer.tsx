@@ -18,13 +18,18 @@ export function EditRenderer({
   onDeny,
 }: ToolRendererProps<"tool-edit">) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const isInputReady = part.state !== "input-streaming";
-  const input = isInputReady ? part.input : undefined;
-  const rawFilePath = input?.filePath ?? "...";
+  const isStreamingInput = part.state === "input-streaming";
+  const isInputReady = !isStreamingInput;
+  const showStreamingPath =
+    isStreamingInput &&
+    part.input?.filePath !== undefined &&
+    (part.input?.oldString !== undefined || part.input?.newString !== undefined);
+  const rawFilePath =
+    isInputReady || showStreamingPath ? (part.input?.filePath ?? "...") : "...";
   const filePath =
     rawFilePath === "..." ? rawFilePath : toRelativePath(rawFilePath, cwd);
-  const oldString = input?.oldString ?? "";
-  const newString = input?.newString ?? "";
+  const oldString = isInputReady ? (part.input?.oldString ?? "") : "";
+  const newString = isInputReady ? (part.input?.newString ?? "") : "";
 
   const oldLines = oldString.split("\n");
   const newLines = newString.split("\n");

@@ -18,12 +18,17 @@ export function WriteRenderer({
   onDeny,
 }: ToolRendererProps<"tool-write">) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const isInputReady = part.state !== "input-streaming";
-  const input = isInputReady ? part.input : undefined;
-  const rawFilePath = input?.filePath ?? "...";
+  const isStreamingInput = part.state === "input-streaming";
+  const isInputReady = !isStreamingInput;
+  const showStreamingPath =
+    isStreamingInput &&
+    part.input?.filePath !== undefined &&
+    part.input?.content !== undefined;
+  const rawFilePath =
+    isInputReady || showStreamingPath ? (part.input?.filePath ?? "...") : "...";
   const filePath =
     rawFilePath === "..." ? rawFilePath : toRelativePath(rawFilePath, cwd);
-  const content = input?.content ?? "";
+  const content = isInputReady ? (part.input?.content ?? "") : "";
 
   const totalLines = content.split("\n").length;
   const hiddenLines = Math.max(0, totalLines - 10);
