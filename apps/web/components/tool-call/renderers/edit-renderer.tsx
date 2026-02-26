@@ -25,24 +25,6 @@ export function EditRenderer({
   const oldString = input?.oldString ?? "";
   const newString = input?.newString ?? "";
 
-  const oldLines = oldString.split("\n");
-  const newLines = newString.split("\n");
-
-  // Count additions and removals using multiset comparison to handle duplicate lines
-  const oldCounts = new Map<string, number>();
-  for (const l of oldLines) oldCounts.set(l, (oldCounts.get(l) ?? 0) + 1);
-  const newCounts = new Map<string, number>();
-  for (const l of newLines) newCounts.set(l, (newCounts.get(l) ?? 0) + 1);
-
-  let additions = 0;
-  for (const [line, count] of newCounts) {
-    additions += Math.max(0, count - (oldCounts.get(line) ?? 0));
-  }
-  let removals = 0;
-  for (const [line, count] of oldCounts) {
-    removals += Math.max(0, count - (newCounts.get(line) ?? 0));
-  }
-
   const output = part.state === "output-available" ? part.output : undefined;
   const outputError =
     output?.success === false ? (output?.error ?? "Edit failed") : undefined;
@@ -139,16 +121,6 @@ export function EditRenderer({
         !mergedState.approvalRequested &&
         !mergedState.denied && (
           <>
-            <div className="mt-2 pl-5 text-sm">
-              <span className="text-green-500">
-                {additions} addition{additions !== 1 ? "s" : ""}
-              </span>
-              <span> and </span>
-              <span className="text-red-500">
-                {removals} removal{removals !== 1 ? "s" : ""}
-              </span>
-            </div>
-
             <div className="ml-5 mt-2 max-h-40 overflow-hidden">
               <MultiFileDiff
                 oldFile={{ name: rawFilePath, contents: oldString }}
@@ -162,16 +134,6 @@ export function EditRenderer({
       {/* Expanded full diff */}
       {isExpanded && showDiff && !mergedState.denied && (
         <div className="mt-3 space-y-3 border-t border-border pt-3">
-          <div className="text-sm">
-            <span className="text-green-500">
-              {additions} addition{additions !== 1 ? "s" : ""}
-            </span>
-            <span> and </span>
-            <span className="text-red-500">
-              {removals} removal{removals !== 1 ? "s" : ""}
-            </span>
-          </div>
-
           {/* Full diff view */}
           <div className="max-h-96 overflow-auto">
             <MultiFileDiff
