@@ -1087,7 +1087,9 @@ export function SessionChatContent(_props: unknown) {
           return;
         }
 
-        const serverChat = payload.chats.find((chat) => chat.id === chatInfo.id);
+        const serverChat = payload.chats.find(
+          (chat) => chat.id === chatInfo.id,
+        );
         if (!serverChat?.isStreaming) {
           return;
         }
