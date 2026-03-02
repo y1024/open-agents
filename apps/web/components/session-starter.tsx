@@ -26,12 +26,14 @@ interface SessionStarterProps {
   }) => void;
   isLoading?: boolean;
   lastRepo: { owner: string; repo: string } | null;
+  className?: string;
 }
 
 export function SessionStarter({
   onSubmit,
   isLoading,
   lastRepo,
+  className,
 }: SessionStarterProps) {
   const [mode, setMode] = useState<SessionMode>(() =>
     lastRepo ? "repo" : "empty",
@@ -105,6 +107,7 @@ export function SessionStarter({
       className={cn(
         "w-full max-w-2xl overflow-hidden rounded-xl border border-border/70 bg-card/80 p-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/75 dark:border-white/10 dark:bg-neutral-900/60 dark:shadow-none sm:p-5",
         "transition-all duration-200",
+        className,
       )}
     >
       <div className="flex flex-col gap-4">
