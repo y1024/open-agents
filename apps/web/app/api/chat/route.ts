@@ -10,9 +10,11 @@ import { connectSandbox, type SandboxState } from "@open-harness/sandbox";
 import { DEFAULT_SANDBOX_PORTS } from "@/lib/sandbox/config";
 import {
   convertToModelMessages,
+  createUIMessageStream,
   createUIMessageStreamResponse,
   type GatewayModelId,
   type LanguageModelUsage,
+  type UIMessageChunk,
 } from "ai";
 import { after } from "next/server";
 import { start } from "workflow/api";
@@ -341,6 +343,33 @@ export async function POST(req: Request) {
     }
   };
 
+  const persistAssistantMessage = async (
+    responseMessage: WebAgentUIMessage | null,
+    activityAt: Date,
+  ) => {
+    if (!responseMessage) {
+      return;
+    }
+
+    try {
+      const upsertResult = await upsertChatMessageScoped({
+        id: responseMessage.id,
+        chatId,
+        role: "assistant",
+        parts: responseMessage,
+      });
+      if (upsertResult.status === "conflict") {
+        console.warn(
+          `Skipped assistant onFinish upsert due to ID scope conflict: ${responseMessage.id}`,
+        );
+      } else if (upsertResult.status === "inserted") {
+        await updateChatAssistantActivity(chatId, activityAt);
+      }
+    } catch (error) {
+      console.error("Failed to save assistant message:", error);
+    }
+  };
+
   after(async () => {
     let workflowResult: ChatWorkflowResult | null = null;
     try {
@@ -349,41 +378,30 @@ export async function POST(req: Request) {
       console.error("Durable chat workflow failed:", error);
     }
 
-    if (!workflowResult) {
-      await clearActiveRunId();
-      return;
-    }
-
     const stillOwnsStream = await clearActiveRunId();
     if (!stillOwnsStream) {
-      return;
+      const latestChat = await getChatById(chatId);
+      const activeStreamId = latestChat?.activeStreamId ?? null;
+
+      // If a newer run replaced this stream, do not persist stale results.
+      if (activeStreamId && activeStreamId !== run.runId) {
+        return;
+      }
+
+      // When the stream was stopped, stop route clears activeStreamId first.
+      // In that case we still persist any partial stream output.
+      if (activeStreamId !== null) {
+        return;
+      }
     }
 
     const activityAt = new Date();
     const responseMessage =
-      workflowResult.responseMessage as WebAgentUIMessage | null;
-    const totalMessageUsage = workflowResult.totalMessageUsage;
+      (workflowResult?.responseMessage as WebAgentUIMessage | null | undefined) ??
+      null;
+    const totalMessageUsage = workflowResult?.totalMessageUsage;
 
-    if (responseMessage) {
-      // Save assistant message (upsert to handle tool results added client-side)
-      try {
-        const upsertResult = await upsertChatMessageScoped({
-          id: responseMessage.id,
-          chatId,
-          role: "assistant",
-          parts: responseMessage,
-        });
-        if (upsertResult.status === "conflict") {
-          console.warn(
-            `Skipped assistant onFinish upsert due to ID scope conflict: ${responseMessage.id}`,
-          );
-        } else if (upsertResult.status === "inserted") {
-          await updateChatAssistantActivity(chatId, activityAt);
-        }
-      } catch (error) {
-        console.error("Failed to save assistant message:", error);
-      }
-    }
+    await persistAssistantMessage(responseMessage, activityAt);
 
     // Persist sandbox state
     // For hybrid sandboxes, we need to be careful not to overwrite the sandboxId
@@ -490,8 +508,24 @@ export async function POST(req: Request) {
     }
   });
 
+  const responseStream = createUIMessageStream({
+    execute: ({ writer }) => {
+      writer.merge(run.getReadable<UIMessageChunk>());
+    },
+    onFinish: ({ messages: streamedMessages }) => {
+      const assistantMessage = [...streamedMessages]
+        .toReversed()
+        .find((message) => message.role === "assistant");
+
+      void persistAssistantMessage(
+        (assistantMessage as WebAgentUIMessage | undefined) ?? null,
+        new Date(),
+      );
+    },
+  });
+
   return createUIMessageStreamResponse({
-    stream: run.getReadable(),
+    stream: responseStream,
     headers: {
       "x-workflow-run-id": run.runId,
     },
