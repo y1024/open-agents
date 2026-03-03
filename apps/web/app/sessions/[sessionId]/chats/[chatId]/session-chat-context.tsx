@@ -13,7 +13,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useSWRConfig } from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import type { ReconnectResponse } from "@/app/api/sandbox/reconnect/route";
 import type { SandboxStatusResponse } from "@/app/api/sandbox/status/route";
 import type { DiffResponse } from "@/app/api/sessions/[sessionId]/diff/route";
@@ -34,6 +34,7 @@ import {
   removeChatInstance,
 } from "@/lib/chat-instance-manager";
 import type { Chat, Session } from "@/lib/db/schema";
+import { fetcher } from "@/lib/swr";
 
 const KNOWN_SANDBOX_TYPES = ["just-bash", "vercel", "hybrid"] as const;
 type KnownSandboxType = (typeof KNOWN_SANDBOX_TYPES)[number];
@@ -101,6 +102,14 @@ export type LifecycleTimingInfo = {
 
 export type SandboxStatusSyncResult = "active" | "no_sandbox" | "unknown";
 
+interface ModelsResponse {
+  models: Array<{
+    id: string;
+    name?: string;
+    context_window?: number;
+  }>;
+}
+
 type RetryChatStreamOptions = {
   auto?: boolean;
   strategy?: "hard" | "soft";
@@ -110,10 +119,32 @@ function toMs(value: Date | null | undefined): number | null {
   return value ? value.getTime() : null;
 }
 
+function toPositiveInteger(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : null;
+}
+
+function resolveContextLimitForModel(
+  models: ModelsResponse["models"] | undefined,
+  modelId: string | null | undefined,
+): number | null {
+  if (!models || !modelId) {
+    return null;
+  }
+
+  const selectedModel = models.find((model) => model.id === modelId);
+  return toPositiveInteger(selectedModel?.context_window);
+}
+
 type SessionChatContextValue = {
   session: Session;
   chatInfo: Chat;
   chat: UseChatHelpers<WebAgentUIMessage>;
+  contextLimit: number | null;
   stopChatStream: () => void;
   sandboxInfo: SandboxInfo | null;
   setSandboxInfo: (info: SandboxInfo) => void;
@@ -202,6 +233,10 @@ type SessionChatContextValue = {
   }) => void;
   /** Check sandbox branch and look for existing PRs, persisting to DB */
   checkBranchAndPr: () => Promise<void>;
+  /** Available models from the gateway */
+  models: ModelsResponse["models"];
+  /** Whether models are still loading */
+  modelsLoading: boolean;
 };
 
 const SessionChatContext = createContext<SessionChatContextValue | undefined>(
@@ -256,6 +291,7 @@ type SessionChatProviderProps = {
   session: Session;
   chat: Chat;
   initialMessages: WebAgentUIMessage[];
+  initialModels: ModelsResponse["models"];
   children: ReactNode;
 };
 
@@ -267,6 +303,7 @@ export function SessionChatProvider({
   session: initialSession,
   chat: initialChat,
   initialMessages,
+  initialModels,
   children,
 }: SessionChatProviderProps) {
   const { mutate } = useSWRConfig();
@@ -276,15 +313,44 @@ export function SessionChatProvider({
   const [hasSnapshotState, setHasSnapshotState] = useState<boolean>(
     !!initialSession.snapshotUrl,
   );
+  const hasInitialModels = initialModels.length > 0;
+  const { data: modelsResponse, isLoading: modelsLoading } =
+    useSWR<ModelsResponse>("/api/models", fetcher, {
+      fallbackData: hasInitialModels ? { models: initialModels } : undefined,
+    });
+  const models = modelsResponse?.models ?? [];
+  const contextLimit = useMemo(
+    () =>
+      resolveContextLimitForModel(
+        modelsResponse?.models,
+        chatInfo.modelId ?? null,
+      ),
+    [modelsResponse?.models, chatInfo.modelId],
+  );
+  const contextLimitRef = useRef<number | null>(contextLimit);
+
+  useEffect(() => {
+    contextLimitRef.current = contextLimit;
+  }, [contextLimit]);
 
   const transport = useMemo(
     () =>
       new AbortableChatTransport({
         api: "/api/chat",
-        body: () => ({
-          sessionId: sessionRecord.id,
-          chatId: chatInfo.id,
-        }),
+        body: () => {
+          const requestContextLimit = contextLimitRef.current;
+          return {
+            sessionId: sessionRecord.id,
+            chatId: chatInfo.id,
+            ...(requestContextLimit !== null
+              ? {
+                  context: {
+                    contextLimit: requestContextLimit,
+                  },
+                }
+              : {}),
+          };
+        },
         prepareReconnectToStreamRequest: ({ id }) => ({
           api: `/api/chat/${id}/stream`,
         }),
@@ -1044,6 +1110,7 @@ export function SessionChatProvider({
       session: sessionRecord,
       chatInfo,
       chat,
+      contextLimit,
       stopChatStream,
       retryChatStream,
       sandboxInfo,
@@ -1088,11 +1155,14 @@ export function SessionChatProvider({
       updateSessionRepo,
       updateSessionPullRequest,
       checkBranchAndPr,
+      models,
+      modelsLoading,
     }),
     [
       sessionRecord,
       chatInfo,
       chat,
+      contextLimit,
       stopChatStream,
       retryChatStream,
       sandboxInfo,
@@ -1137,6 +1207,8 @@ export function SessionChatProvider({
       updateSessionRepo,
       updateSessionPullRequest,
       checkBranchAndPr,
+      models,
+      modelsLoading,
     ],
   );
 

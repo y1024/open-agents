@@ -4,8 +4,6 @@ import type { WebAgentUIMessage } from "@/app/types";
 import { DiffsProvider } from "@/components/diffs-provider";
 import { getChatById, getChatMessages } from "@/lib/db/sessions";
 import { getSessionByIdCached } from "@/lib/db/sessions-cache";
-import { getUserPreferences } from "@/lib/db/user-preferences";
-import { type AvailableModel, getModelDisplayName } from "@/lib/models";
 import { fetchAvailableLanguageModelsWithContext } from "@/lib/models-with-context";
 import { getServerSession } from "@/lib/session/get-server-session";
 import { SessionChatContent } from "./session-chat-content";
@@ -14,17 +12,6 @@ import { SessionChatProvider } from "./session-chat-context";
 interface SessionChatPageProps {
   params: Promise<{ sessionId: string; chatId: string }>;
 }
-
-type SessionChatModelOption = {
-  id: string;
-  label: string;
-  description: string;
-  isVariant: boolean;
-};
-
-type UserModelVariant = Awaited<
-  ReturnType<typeof getUserPreferences>
->["modelVariants"][number];
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -45,39 +32,6 @@ async function getInitialModels() {
   } catch {
     return [];
   }
-}
-
-function buildSessionChatModelOptions(
-  models: AvailableModel[],
-  modelVariants: UserModelVariant[],
-): SessionChatModelOption[] {
-  const modelNameById = new Map(
-    models.map((model) => [model.id, getModelDisplayName(model)]),
-  );
-
-  const baseModelOptions: SessionChatModelOption[] = models.map((model) => ({
-    id: model.id,
-    label: getModelDisplayName(model),
-    description: model.id,
-    isVariant: false,
-  }));
-
-  const optionIds = new Set(baseModelOptions.map((option) => option.id));
-  const variantOptions: SessionChatModelOption[] = modelVariants
-    .filter((variant) => !optionIds.has(variant.id))
-    .map((variant) => {
-      const baseModelName = modelNameById.get(variant.baseModelId);
-      return {
-        id: variant.id,
-        label: variant.name,
-        description: baseModelName
-          ? `Variant of ${baseModelName}`
-          : `Variant of ${variant.baseModelId}`,
-        isVariant: true,
-      };
-    });
-
-  return [...baseModelOptions, ...variantOptions];
 }
 
 async function getChatByIdWithRetry(
@@ -137,39 +91,28 @@ export default async function SessionChatPage({
     redirect("/");
   }
 
-  // Fetch chat, messages, models, and user model variants in parallel
-  const [chat, dbMessages, initialModels, preferences] = await Promise.all([
+  // Fetch chat, messages, and models in parallel
+  const [chat, dbMessages, initialModels] = await Promise.all([
     getChatByIdWithRetry(chatId, sessionId),
     getChatMessages(chatId),
     getInitialModels(),
-    getUserPreferences(session.user.id),
   ]);
-
   if (!chat) {
     if (isOptimisticChatId(chatId)) {
       redirect(`/sessions/${sessionId}`);
     }
     notFound();
   }
-
-  const modelOptions = buildSessionChatModelOptions(
-    initialModels,
-    preferences.modelVariants ?? [],
-  );
-
   const initialMessages = dbMessages.map((m) => m.parts as WebAgentUIMessage);
-
   return (
     <DiffsProvider>
       <SessionChatProvider
         session={sessionRecord}
         chat={chat}
         initialMessages={initialMessages}
+        initialModels={initialModels}
       >
-        <SessionChatContent
-          initialModels={initialModels}
-          modelOptions={modelOptions}
-        />
+        <SessionChatContent />
       </SessionChatProvider>
     </DiffsProvider>
   );

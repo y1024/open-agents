@@ -31,21 +31,74 @@ import { recordUsage } from "@/lib/db/usage";
 import { getRepoToken } from "@/lib/github/get-repo-token";
 import { getUserGitHubToken } from "@/lib/github/user-token";
 import { getUserPreferences } from "@/lib/db/user-preferences";
-import { resolveModelSelection } from "@/lib/model-variants";
 import { DEFAULT_MODEL_ID } from "@/lib/models";
 import { resumableStreamContext } from "@/lib/resumable-stream-context";
 import { buildActiveLifecycleUpdate } from "@/lib/sandbox/lifecycle";
 import { isSandboxActive } from "@/lib/sandbox/utils";
 import { getServerSession } from "@/lib/session/get-server-session";
 import { onStopSignal } from "@/lib/stop-signal";
+import { after } from "next/server";
 
 const cachedInputTokensFor = (usage: LanguageModelUsage) =>
   usage.inputTokenDetails?.cacheReadTokens ?? usage.cachedInputTokens ?? 0;
+
+const DEFAULT_CONTEXT_LIMIT = 200_000;
+
+interface ChatCompactionContextPayload {
+  contextLimit?: number;
+  lastInputTokens?: number;
+}
 
 interface ChatRequestBody {
   messages: WebAgentUIMessage[];
   sessionId?: string;
   chatId?: string;
+  context?: ChatCompactionContextPayload;
+}
+
+function toPositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : undefined;
+}
+
+function toPositiveInputTokens(value: unknown): number | undefined {
+  const normalized = toPositiveInteger(value);
+  return normalized && normalized > 0 ? normalized : undefined;
+}
+
+function extractLastInputTokensFromMessages(
+  messages: WebAgentUIMessage[],
+): number | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (!message || message.role !== "assistant") {
+      continue;
+    }
+
+    const metadata = (message as { metadata?: unknown }).metadata;
+    if (!metadata || typeof metadata !== "object") {
+      continue;
+    }
+
+    const lastStepUsage = (metadata as { lastStepUsage?: unknown })
+      .lastStepUsage;
+    if (!lastStepUsage || typeof lastStepUsage !== "object") {
+      continue;
+    }
+
+    const inputTokens = (lastStepUsage as { inputTokens?: unknown })
+      .inputTokens;
+    const normalizedTokens = toPositiveInputTokens(inputTokens);
+    if (normalizedTokens) {
+      return normalizedTokens;
+    }
+  }
+
+  return undefined;
 }
 
 const STREAM_TOKEN_SEPARATOR = ":";
@@ -96,6 +149,38 @@ const parseStreamTokenStartedAt = (streamToken: string | null) => {
 
 export const maxDuration = 800;
 
+function refreshCachedDiffInBackground(req: Request, sessionId: string): void {
+  const cookieHeader = req.headers.get("cookie");
+  if (!cookieHeader) {
+    return;
+  }
+
+  const diffUrl = new URL(`/api/sessions/${sessionId}/diff`, req.url);
+  after(
+    fetch(diffUrl, {
+      method: "GET",
+      headers: {
+        cookie: cookieHeader,
+      },
+      cache: "no-store",
+    })
+      .then((response) => {
+        if (response.ok) {
+          return;
+        }
+        console.warn(
+          `[chat] Failed to refresh cached diff for session ${sessionId}: ${response.status}`,
+        );
+      })
+      .catch((error) => {
+        console.error(
+          `[chat] Failed to refresh cached diff for session ${sessionId}:`,
+          error,
+        );
+      }),
+  );
+}
+
 export async function POST(req: Request) {
   // 1. Validate session
   const session = await getServerSession();
@@ -110,7 +195,12 @@ export async function POST(req: Request) {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { messages, sessionId, chatId } = body;
+  const {
+    messages,
+    sessionId,
+    chatId,
+    context: requestedCompactionContext,
+  } = body;
 
   // 2. Require sessionId and chatId to ensure sandbox ownership verification
   if (!sessionId || !chatId) {
@@ -311,44 +401,14 @@ export async function POST(req: Request) {
     }
   }
 
-  let preferences;
-  try {
-    preferences = await getUserPreferences(session.user.id);
-  } catch (error) {
-    console.error("Failed to load user preferences:", error);
-    preferences = {
-      defaultModelId: DEFAULT_MODEL_ID,
-      defaultSubagentModelId: null,
-      modelVariants: [],
-      defaultSandboxType: "vercel",
-    };
-  }
-
-  // Resolve model from chat's modelId, falling back to default if invalid.
-  const selectedModelId = chat.modelId ?? DEFAULT_MODEL_ID;
-  const resolvedMainModel = resolveModelSelection(
-    selectedModelId,
-    preferences.modelVariants,
-  );
-
-  if (resolvedMainModel.missingVariant) {
-    console.warn(
-      `Missing model variant "${selectedModelId}" for chat ${chat.id}. Falling back to default model.`,
-    );
-  }
-
-  const resolvedMainModelId = resolvedMainModel.missingVariant
-    ? DEFAULT_MODEL_ID
-    : resolvedMainModel.resolvedModelId;
-
+  // Resolve model from chat's modelId, falling back to default if invalid
+  const modelId = chat.modelId ?? DEFAULT_MODEL_ID;
   let model;
   try {
-    model = gateway(resolvedMainModelId as GatewayModelId, {
-      providerOptionsOverrides: resolvedMainModel.providerOptionsByProvider,
-    });
+    model = gateway(modelId as GatewayModelId);
   } catch (error) {
     console.error(
-      `Invalid model ID "${resolvedMainModelId}", falling back to default:`,
+      `Invalid model ID "${modelId}", falling back to default:`,
       error,
     );
     model = gateway(DEFAULT_MODEL_ID as GatewayModelId);
@@ -356,30 +416,29 @@ export async function POST(req: Request) {
 
   // Resolve subagent model from user preferences (if configured)
   let subagentModel: LanguageModel | undefined;
-  if (preferences.defaultSubagentModelId) {
-    const resolvedSubagentModel = resolveModelSelection(
-      preferences.defaultSubagentModelId,
-      preferences.modelVariants,
-    );
-
-    if (resolvedSubagentModel.missingVariant) {
-      console.warn(
-        `Missing subagent model variant "${preferences.defaultSubagentModelId}" for user ${session.user.id}.`,
+  try {
+    const preferences = await getUserPreferences(session.user.id);
+    if (preferences.defaultSubagentModelId) {
+      subagentModel = gateway(
+        preferences.defaultSubagentModelId as GatewayModelId,
       );
-    } else {
-      try {
-        subagentModel = gateway(
-          resolvedSubagentModel.resolvedModelId as GatewayModelId,
-          {
-            providerOptionsOverrides:
-              resolvedSubagentModel.providerOptionsByProvider,
-          },
-        );
-      } catch (error) {
-        console.error("Failed to resolve subagent model preference:", error);
-      }
     }
+  } catch (error) {
+    console.error("Failed to resolve subagent model preference:", error);
   }
+
+  const requestedContextLimit = toPositiveInteger(
+    requestedCompactionContext?.contextLimit,
+  );
+  const requestedLastInputTokens = toPositiveInputTokens(
+    requestedCompactionContext?.lastInputTokens,
+  );
+  const inferredLastInputTokens = extractLastInputTokensFromMessages(messages);
+
+  const compactionContext = {
+    contextLimit: requestedContextLimit ?? DEFAULT_CONTEXT_LIMIT,
+    lastInputTokens: requestedLastInputTokens ?? inferredLastInputTokens,
+  };
 
   // Use Redis stop signals as the sole cancellation mechanism for generation.
   // We intentionally do not bind `req.signal` so a transient client disconnect
@@ -432,6 +491,7 @@ export async function POST(req: Request) {
         sandbox,
         model,
         subagentModel,
+        context: compactionContext,
         // TODO: consider enabling approvals for non-cloud-sandbox environments
         approval: {
           type: "interactive",
@@ -626,6 +686,9 @@ export async function POST(req: Request) {
         if (totalMessageUsage) {
           postUsage(totalMessageUsage, model, "main", [responseMessage]);
         }
+
+        // Keep offline diff cache warm even when the chat page is not open.
+        refreshCachedDiffInBackground(req, sessionId);
 
         const subagentUsageEvents = collectTaskToolUsageEvents(responseMessage);
         if (subagentUsageEvents.length === 0) {

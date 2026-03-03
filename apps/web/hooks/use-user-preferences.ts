@@ -1,14 +1,12 @@
 "use client";
 
 import useSWR from "swr";
-import type { SandboxType } from "@/components/sandbox-selector-compact";
-import type { ModelVariant } from "@/lib/model-variants";
 import { fetcher } from "@/lib/swr";
+import type { SandboxType } from "@/components/sandbox-selector-compact";
 
 export interface UserPreferences {
   defaultModelId: string;
   defaultSubagentModelId: string | null;
-  modelVariants: ModelVariant[];
   defaultSandboxType: SandboxType;
 }
 

@@ -8,7 +8,9 @@ import {
   type TypedToolResult,
 } from "ai";
 import { z } from "zod";
-import { addCacheControl, compactContext } from "./context-management";
+import { addCacheControl } from "./context-management";
+import { aggressiveCompactContext } from "./context-management/aggressive-compaction";
+
 import type { SkillMetadata } from "./skills/types";
 import { buildSystemPrompt } from "./system-prompt";
 import {
@@ -37,6 +39,11 @@ const approvalConfigSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("delegated") }),
 ]);
 
+const compactionContextSchema = z.object({
+  contextLimit: z.number().int().positive().optional(),
+  lastInputTokens: z.number().int().nonnegative().optional(),
+});
+
 const callOptionsSchema = z.object({
   sandbox: z.custom<Sandbox>(),
   approval: approvalConfigSchema,
@@ -44,9 +51,78 @@ const callOptionsSchema = z.object({
   subagentModel: z.custom<LanguageModel>().optional(),
   customInstructions: z.string().optional(),
   skills: z.custom<SkillMetadata[]>().optional(),
+  context: compactionContextSchema.optional(),
 });
 
+type CompactionContext = z.infer<typeof compactionContextSchema>;
+
 export type OpenHarnessAgentCallOptions = z.infer<typeof callOptionsSchema>;
+
+function getCompactionContextFromExperimentalContext(
+  experimentalContext: unknown,
+): CompactionContext | undefined {
+  if (!experimentalContext || typeof experimentalContext !== "object") {
+    return undefined;
+  }
+
+  const contextValue = (experimentalContext as { context?: unknown }).context;
+  const parsed = compactionContextSchema.safeParse(contextValue);
+  return parsed.success ? parsed.data : undefined;
+}
+
+const DEFAULT_CONTEXT_LIMIT = 200_000;
+
+interface CompactionTuning {
+  triggerPercent: number;
+  minSavingsPercent: number;
+  retainRecentToolCalls: number;
+}
+
+const DEFAULT_COMPACTION_TUNING: CompactionTuning = {
+  triggerPercent: 0.58,
+  minSavingsPercent: 0.03,
+  retainRecentToolCalls: 32,
+};
+
+/**
+ * Optional model-specific compaction tuning overrides.
+ *
+ * Keys support exact matches ("provider/model") and partial matches
+ * (any substring of the full model id).
+ */
+const MODEL_COMPACTION_TUNING_OVERRIDES: Record<
+  string,
+  Partial<CompactionTuning>
+> = {};
+
+function getModelId(model: LanguageModel): string {
+  return typeof model === "string" ? model : model.modelId;
+}
+
+function resolveCompactionTuning(model: LanguageModel): CompactionTuning {
+  const modelId = getModelId(model);
+
+  const exactMatch = MODEL_COMPACTION_TUNING_OVERRIDES[modelId];
+  if (exactMatch) {
+    return {
+      ...DEFAULT_COMPACTION_TUNING,
+      ...exactMatch,
+    };
+  }
+
+  const partialMatch = Object.entries(MODEL_COMPACTION_TUNING_OVERRIDES).find(
+    ([key]) => modelId.includes(key),
+  );
+
+  if (partialMatch?.[1]) {
+    return {
+      ...DEFAULT_COMPACTION_TUNING,
+      ...partialMatch[1],
+    };
+  }
+
+  return DEFAULT_COMPACTION_TUNING;
+}
 
 export const defaultModel = gateway("anthropic/claude-haiku-4.5");
 export const defaultModelLabel = defaultModel.modelId;
@@ -71,12 +147,26 @@ export const openHarnessAgent = new ToolLoopAgent({
   tools,
   stopWhen: stepCountIs(100),
   callOptionsSchema,
-  prepareStep: ({ messages, model, steps }) => ({
-    messages: addCacheControl({
-      messages: compactContext({ messages, steps }),
-      model,
-    }),
-  }),
+  prepareStep: ({ messages, model, steps, experimental_context }) => {
+    const callContext =
+      getCompactionContextFromExperimentalContext(experimental_context);
+    const compactionTuning = resolveCompactionTuning(model);
+
+    return {
+      messages: addCacheControl({
+        messages: aggressiveCompactContext({
+          messages,
+          steps,
+          contextLimit: callContext?.contextLimit ?? DEFAULT_CONTEXT_LIMIT,
+          lastInputTokens: callContext?.lastInputTokens,
+          triggerPercent: compactionTuning.triggerPercent,
+          minSavingsPercent: compactionTuning.minSavingsPercent,
+          retainRecentToolCalls: compactionTuning.retainRecentToolCalls,
+        }),
+        model,
+      }),
+    };
+  },
   prepareCall: ({ options, model, ...settings }) => {
     if (!options) {
       throw new Error(
@@ -89,6 +179,7 @@ export const openHarnessAgent = new ToolLoopAgent({
     const customInstructions = options.customInstructions;
     const sandbox = options.sandbox;
     const skills = options.skills ?? [];
+    const context = options.context;
 
     // Derive mode for system prompt (interactive vs background)
     const mode = approval.type === "background" ? "background" : "interactive";
@@ -117,6 +208,7 @@ export const openHarnessAgent = new ToolLoopAgent({
         skills,
         model: callModel,
         subagentModel,
+        context,
       },
     };
   },

@@ -1,17 +1,14 @@
-import type { AnthropicLanguageModelOptions } from "@ai-sdk/anthropic";
-import { devToolsMiddleware } from "@ai-sdk/devtools";
-import type { OpenAIResponsesProviderOptions } from "@ai-sdk/openai";
 import {
   createGateway,
   defaultSettingsMiddleware,
   gateway as aiGateway,
   wrapLanguageModel,
   type GatewayModelId,
-  type JSONValue,
   type LanguageModel,
 } from "ai";
-
-type ProviderOptionsByProvider = Record<string, Record<string, JSONValue>>;
+import type { AnthropicLanguageModelOptions } from "@ai-sdk/anthropic";
+import type { OpenAIResponsesProviderOptions } from "@ai-sdk/openai";
+import { devToolsMiddleware } from "@ai-sdk/devtools";
 
 // Models with 4.5+ support adaptive thinking with effort control.
 // Older models use the legacy extended thinking API with a budget.
@@ -28,37 +25,6 @@ function getAnthropicSettings(modelId: string): AnthropicLanguageModelOptions {
   };
 }
 
-function hasProviderOptions(
-  providerOptions: ProviderOptionsByProvider,
-): boolean {
-  return Object.keys(providerOptions).length > 0;
-}
-
-function mergeProviderOptions(
-  defaults: ProviderOptionsByProvider,
-  overrides?: ProviderOptionsByProvider,
-): ProviderOptionsByProvider {
-  if (!overrides) {
-    return defaults;
-  }
-
-  const merged: ProviderOptionsByProvider = { ...defaults };
-
-  for (const [provider, providerSettings] of Object.entries(overrides)) {
-    if (provider in merged) {
-      merged[provider] = {
-        ...merged[provider],
-        ...providerSettings,
-      };
-      continue;
-    }
-
-    merged[provider] = providerSettings;
-  }
-
-  return merged;
-}
-
 export interface GatewayConfig {
   baseURL: string;
   apiKey: string;
@@ -67,14 +33,13 @@ export interface GatewayConfig {
 export interface GatewayOptions {
   devtools?: boolean;
   config?: GatewayConfig;
-  providerOptionsOverrides?: ProviderOptionsByProvider;
 }
 
 export function gateway(
   modelId: GatewayModelId,
   options: GatewayOptions = {},
 ): LanguageModel {
-  const { devtools = false, config, providerOptionsOverrides } = options;
+  const { devtools = false, config } = options;
 
   // Use custom gateway config or default AI SDK gateway
   const baseGateway = config
@@ -83,40 +48,30 @@ export function gateway(
 
   let model: LanguageModel = baseGateway(modelId);
 
-  const defaultProviderOptions: ProviderOptionsByProvider = {};
-
   // Apply anthropic middleware for anthropic models
   if (modelId.startsWith("anthropic/")) {
-    defaultProviderOptions.anthropic = getAnthropicSettings(modelId) as Record<
-      string,
-      JSONValue
-    >;
-  }
-
-  // Apply openai middleware to expose reasoning summaries and encrypted content
-  if (modelId.startsWith("openai/")) {
-    const openaiProviderOptions = {
-      reasoningEffort: "high",
-      reasoningSummary: "detailed",
-      store: false,
-      include: ["reasoning.encrypted_content"],
-    } satisfies OpenAIResponsesProviderOptions;
-
-    defaultProviderOptions.openai = openaiProviderOptions as Record<
-      string,
-      JSONValue
-    >;
-  }
-
-  const providerOptions = mergeProviderOptions(
-    defaultProviderOptions,
-    providerOptionsOverrides,
-  );
-
-  if (hasProviderOptions(providerOptions)) {
     const middleware = defaultSettingsMiddleware({
       settings: {
-        providerOptions,
+        providerOptions: {
+          anthropic: getAnthropicSettings(modelId),
+        },
+      },
+    });
+    model = wrapLanguageModel({ model, middleware });
+  }
+
+  // Apply openai middleware to expose reasoning summaries
+  if (modelId.startsWith("openai/")) {
+    const middleware = defaultSettingsMiddleware({
+      settings: {
+        providerOptions: {
+          openai: {
+            reasoningEffort: "high",
+            reasoningSummary: "detailed",
+            store: false,
+            include: ["reasoning.encrypted_content"],
+          } satisfies OpenAIResponsesProviderOptions,
+        },
       },
     });
     model = wrapLanguageModel({ model, middleware });

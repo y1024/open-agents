@@ -3,6 +3,9 @@ import "server-only";
 import { gateway } from "ai";
 import type { AvailableModel } from "./models";
 
+const MODELS_DEV_URL = "https://models.dev/api.json";
+const MODELS_DEV_TIMEOUT_MS = 750;
+
 type GatewayModel = Awaited<
   ReturnType<typeof gateway.getAvailableModels>
 >["models"][number];
@@ -54,8 +57,13 @@ function getModelsDevContextMap(data: unknown): Map<string, number> {
 }
 
 async function fetchModelsDevContextMap(): Promise<Map<string, number>> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), MODELS_DEV_TIMEOUT_MS);
+
   try {
-    const response = await fetch("https://models.dev/api.json");
+    const response = await fetch(MODELS_DEV_URL, {
+      signal: controller.signal,
+    });
     if (!response.ok) {
       return new Map();
     }
@@ -63,6 +71,8 @@ async function fetchModelsDevContextMap(): Promise<Map<string, number>> {
     return getModelsDevContextMap(data);
   } catch {
     return new Map();
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -95,15 +105,20 @@ function addContextWindow(
   return { ...model, context_window: contextLimit };
 }
 
+export async function fetchAvailableLanguageModels(): Promise<
+  AvailableModel[]
+> {
+  const { models } = await gateway.getAvailableModels();
+  return models.filter((model) => model.modelType === "language");
+}
+
 export async function fetchAvailableLanguageModelsWithContext(): Promise<
   AvailableModel[]
 > {
-  const [{ models }, modelsDevContextMap] = await Promise.all([
-    gateway.getAvailableModels(),
+  const [models, modelsDevContextMap] = await Promise.all([
+    fetchAvailableLanguageModels(),
     fetchModelsDevContextMap(),
   ]);
 
-  return models
-    .filter((model) => model.modelType === "language")
-    .map((model) => addContextWindow(model, modelsDevContextMap));
+  return models.map((model) => addContextWindow(model, modelsDevContextMap));
 }

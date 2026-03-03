@@ -1,7 +1,7 @@
 "use client";
 
 import type { AskUserQuestionInput, TaskToolUIPart } from "@open-harness/agent";
-import { isReasoningUIPart, isToolUIPart } from "ai";
+import { isReasoningUIPart, isToolUIPart, type FileUIPart } from "ai";
 import {
   Archive,
   ArchiveRestore,
@@ -19,8 +19,10 @@ import {
   Mic,
   Paperclip,
   RefreshCw,
+  RotateCcw,
   Share2,
   Square,
+  Trash2,
   X,
 } from "lucide-react";
 import dynamic from "next/dynamic";
@@ -33,7 +35,6 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import useSWR from "swr";
 import type {
   WebAgentUIMessage,
   WebAgentUIMessagePart,
@@ -75,13 +76,8 @@ import {
   shouldShowThinkingIndicator,
 } from "@/lib/chat-streaming-state";
 import { ACCEPT_IMAGE_TYPES, isValidImageType } from "@/lib/image-utils";
-import {
-  type AvailableModel,
-  DEFAULT_CONTEXT_LIMIT,
-  getModelContextLimit,
-} from "@/lib/models";
+import { DEFAULT_CONTEXT_LIMIT } from "@/lib/models";
 import { DEFAULT_SANDBOX_TIMEOUT_MS } from "@/lib/sandbox/config";
-import { fetcher } from "@/lib/swr";
 import { streamdownPlugins } from "@/lib/streamdown-config";
 import { cn } from "@/lib/utils";
 import {
@@ -114,12 +110,6 @@ const Streamdown = dynamic(
 
 const STREAM_RECOVERY_STALL_MS = 4_000;
 const STREAM_RECOVERY_MIN_INTERVAL_MS = 8_000;
-const CHAT_IN_FLIGHT_SETTLE_MS = 300;
-const STREAMDOWN_FADE_IN_ANIMATION = {
-  animation: "fadeIn",
-  duration: 250,
-  easing: "ease-out",
-} as const;
 
 const emptySubscribe = () => () => {};
 
@@ -173,22 +163,6 @@ interface GroupedRenderMessage {
   message: WebAgentUIMessage;
   groups: MessageRenderGroup[];
   isStreaming: boolean;
-}
-
-interface ModelsResponse {
-  models: AvailableModel[];
-}
-
-type SessionChatModelOption = {
-  id: string;
-  label: string;
-  description: string;
-  isVariant: boolean;
-};
-
-interface SessionChatContentProps {
-  initialModels: AvailableModel[];
-  modelOptions: SessionChatModelOption[];
 }
 
 function getPartIdentity(part: WebAgentUIMessagePart): string {
@@ -254,13 +228,11 @@ function isSandboxValid(sandboxInfo: SandboxInfo | null): boolean {
   return Date.now() < expiresAt;
 }
 
-const tokenFormatter = new Intl.NumberFormat("en-US", {
-  notation: "compact",
-  maximumFractionDigits: 1,
-});
-
 function formatTokens(tokens: number): string {
-  return tokenFormatter.format(tokens).toLowerCase();
+  if (tokens >= 1000) {
+    return `${(tokens / 1000).toFixed(1)}k`;
+  }
+  return tokens.toString();
 }
 
 function sleep(ms: number): Promise<void> {
@@ -278,9 +250,7 @@ function CircularProgress({
 }) {
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
-  const normalizedPercentage = Math.min(100, Math.max(0, percentage));
-  const strokeDashoffset =
-    circumference - (normalizedPercentage / 100) * circumference;
+  const strokeDashoffset = circumference - (percentage / 100) * circumference;
 
   return (
     <svg width={size} height={size} className="-rotate-90">
@@ -663,10 +633,7 @@ function ShareDialog({
   );
 }
 
-export function SessionChatContent({
-  initialModels,
-  modelOptions,
-}: SessionChatContentProps) {
+export function SessionChatContent(_props: unknown) {
   const router = useRouter();
   const [input, setInput] = useState("");
   const [isCreatingSandbox, setIsCreatingSandbox] = useState(false);
@@ -750,6 +717,7 @@ export function SessionChatContent({
     session,
     chatInfo,
     chat,
+    contextLimit,
     stopChatStream,
     retryChatStream,
     initialMessages,
@@ -781,11 +749,14 @@ export function SessionChatContent({
     updateSessionRepo,
     updateSessionPullRequest,
     checkBranchAndPr,
+    models,
+    modelsLoading,
   } = useSessionChatContext();
   const {
     messages,
     error,
     sendMessage,
+    setMessages,
     status,
     addToolApprovalResponse,
     addToolOutput,
@@ -797,73 +768,11 @@ export function SessionChatContent({
     clearChatTitle,
     refreshChats,
   } = useSessionChats(session.id);
-  const hasInitialModels = initialModels.length > 0;
-  const { data: modelsData } = useSWR<ModelsResponse>("/api/models", fetcher, {
-    revalidateOnFocus: false,
-    revalidateOnReconnect: false,
-    revalidateIfStale: false,
-    revalidateOnMount: !hasInitialModels,
-    fallbackData: hasInitialModels ? { models: initialModels } : undefined,
-  });
-  const models = useMemo(
-    () => modelsData?.models ?? initialModels,
-    [modelsData?.models, initialModels],
-  );
-  const selectedModelLabel = useMemo(() => {
-    if (!chatInfo.modelId) {
-      return "";
-    }
-
-    const selectedModel = modelOptions.find(
-      (modelOption) => modelOption.id === chatInfo.modelId,
-    );
-
-    if (selectedModel) {
-      return selectedModel.label;
-    }
-
-    return chatInfo.modelId.startsWith("variant:")
-      ? `${chatInfo.modelId} (missing)`
-      : chatInfo.modelId;
-  }, [chatInfo.modelId, modelOptions]);
-
   const renderMessages = useMemo(
     () => (hasMounted ? messages : initialMessages),
     [hasMounted, messages, initialMessages],
   );
   const isChatInFlight = isChatInFlightStatus(status);
-  const [isChatInFlightSettled, setIsChatInFlightSettled] =
-    useState(isChatInFlight);
-  const chatInFlightSettleTimeoutRef = useRef<ReturnType<
-    typeof setTimeout
-  > | null>(null);
-
-  useEffect(() => {
-    if (chatInFlightSettleTimeoutRef.current) {
-      clearTimeout(chatInFlightSettleTimeoutRef.current);
-      chatInFlightSettleTimeoutRef.current = null;
-    }
-
-    if (isChatInFlight) {
-      setIsChatInFlightSettled(true);
-      return;
-    }
-
-    // Avoid visual flicker when status briefly bounces to ready between
-    // consecutive tool-loop stream steps.
-    chatInFlightSettleTimeoutRef.current = setTimeout(() => {
-      chatInFlightSettleTimeoutRef.current = null;
-      setIsChatInFlightSettled(false);
-    }, CHAT_IN_FLIGHT_SETTLE_MS);
-
-    return () => {
-      if (chatInFlightSettleTimeoutRef.current) {
-        clearTimeout(chatInFlightSettleTimeoutRef.current);
-        chatInFlightSettleTimeoutRef.current = null;
-      }
-    };
-  }, [isChatInFlight]);
-
   const lastMessage = useMemo(
     () => renderMessages[renderMessages.length - 1],
     [renderMessages],
@@ -1005,137 +914,10 @@ export function SessionChatContent({
         message,
         groups,
         isStreaming:
-          isChatInFlightSettled && messageIndex === renderMessages.length - 1,
+          isChatInFlight && messageIndex === renderMessages.length - 1,
       };
     });
-  }, [renderMessages, isChatInFlightSettled]);
-  const handleToolApprove = useCallback(
-    (id: string) => {
-      addToolApprovalResponse({ id, approved: true });
-    },
-    [addToolApprovalResponse],
-  );
-  const handleToolDeny = useCallback(
-    (id: string, reason?: string) => {
-      addToolApprovalResponse({
-        id,
-        approved: false,
-        reason,
-      });
-    },
-    [addToolApprovalResponse],
-  );
-  const renderedMessageGroups = useMemo(
-    () =>
-      groupedRenderMessages.map(
-        ({ message: m, groups, isStreaming: isMessageStreaming }) => {
-          return groups.map((group) => {
-            if (group.type === "task-group") {
-              return (
-                <div key={`${m.id}-${group.renderKey}`} className="max-w-full">
-                  <TaskGroupView
-                    taskParts={group.tasks}
-                    activeApprovalId={
-                      group.tasks.find((t) => t.state === "approval-requested")
-                        ?.approval?.id ?? null
-                    }
-                    isStreaming={isMessageStreaming}
-                    onApprove={handleToolApprove}
-                    onDeny={handleToolDeny}
-                  />
-                </div>
-              );
-            }
-
-            const p = group.part;
-
-            if (isReasoningUIPart(p)) {
-              return (
-                <div
-                  key={`${m.id}-${group.renderKey}`}
-                  className="flex justify-start"
-                >
-                  <ThinkingBlock
-                    text={p.text}
-                    isStreaming={isMessageStreaming && p.state === "streaming"}
-                  />
-                </div>
-              );
-            }
-
-            if (p.type === "text") {
-              return (
-                <div
-                  key={`${m.id}-${group.renderKey}`}
-                  className={cn(
-                    "flex min-w-0",
-                    m.role === "user" ? "justify-end" : "justify-start",
-                  )}
-                >
-                  {m.role === "user" ? (
-                    <div className="min-w-0 max-w-[80%] rounded-3xl bg-secondary px-4 py-2">
-                      <p className="whitespace-pre-wrap break-words">
-                        {p.text}
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="min-w-0 w-full overflow-hidden">
-                      <Streamdown
-                        animated={
-                          isMessageStreaming
-                            ? STREAMDOWN_FADE_IN_ANIMATION
-                            : undefined
-                        }
-                        mode={isMessageStreaming ? "streaming" : "static"}
-                        isAnimating={isMessageStreaming}
-                        plugins={streamdownPlugins}
-                      >
-                        {p.text}
-                      </Streamdown>
-                    </div>
-                  )}
-                </div>
-              );
-            }
-
-            if (isToolUIPart(p)) {
-              return (
-                <div key={`${m.id}-${group.renderKey}`} className="max-w-full">
-                  <ToolCall
-                    part={p as WebAgentUIToolPart}
-                    isStreaming={isMessageStreaming}
-                    onApprove={handleToolApprove}
-                    onDeny={handleToolDeny}
-                  />
-                </div>
-              );
-            }
-
-            // Render image attachments
-            if (p.type === "file" && p.mediaType?.startsWith("image/")) {
-              return (
-                <div
-                  key={`${m.id}-${group.renderKey}`}
-                  className="flex justify-end"
-                >
-                  <div className="max-w-[80%]">
-                    {/* eslint-disable-next-line @next/next/no-img-element -- Data URLs not supported by next/image */}
-                    <img
-                      src={p.url}
-                      alt={p.filename ?? "Attached image"}
-                      className="max-h-64 rounded-lg"
-                    />
-                  </div>
-                </div>
-              );
-            }
-
-            return null;
-          });
-        },
-      ),
-    [groupedRenderMessages, handleToolApprove, handleToolDeny],
-  );
+  }, [renderMessages, isChatInFlight]);
   const [isUpdatingModel, setIsUpdatingModel] = useState(false);
   const lastStatusSyncAtRef = useRef(0);
   const statusSyncInFlightRef = useRef(false);
@@ -1257,7 +1039,7 @@ export function SessionChatContent({
   }, [requestMarkChatRead]);
 
   // Keep the recovery logic in a ref so event-listener effects never
-  // churn during streaming. The ref is updated on every render (cheap) while
+  // churn during streaming.  The ref is updated on every render (cheap) while
   // the stable wrapper below keeps a constant identity for effects.
   const maybeRecoverStreamRef = useRef(() => {});
   maybeRecoverStreamRef.current = () => {
@@ -1277,7 +1059,7 @@ export function SessionChatContent({
 
     // Only run "silent stream" recovery while still in submitted state.
     // During active streaming, reconnecting can replay recent chunks and cause
-    // visible jank even though the connection is healthy.
+    // visible jank even when the connection is healthy.
     if (status !== "submitted" || hasAssistantRenderableContent) {
       return;
     }
@@ -1468,6 +1250,175 @@ export function SessionChatContent({
   });
 
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [deleteMessageError, setDeleteMessageError] = useState<string | null>(
+    null,
+  );
+  const [deletingMessageId, setDeletingMessageId] = useState<string | null>(
+    null,
+  );
+  const [resendingMessageId, setResendingMessageId] = useState<string | null>(
+    null,
+  );
+
+  const hasMessageActionInFlight =
+    deletingMessageId !== null || resendingMessageId !== null || isChatInFlight;
+
+  const handleDeleteUserMessage = useCallback(
+    async (messageId: string) => {
+      if (hasMessageActionInFlight) {
+        return;
+      }
+
+      const targetMessageIndex = messages.findIndex(
+        (message) => message.id === messageId,
+      );
+      if (
+        targetMessageIndex < 0 ||
+        messages[targetMessageIndex]?.role !== "user"
+      ) {
+        return;
+      }
+
+      const confirmed = window.confirm(
+        "Delete this message and all following messages?",
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      setDeleteMessageError(null);
+      setDeletingMessageId(messageId);
+
+      try {
+        const response = await fetch(
+          `/api/sessions/${session.id}/chats/${chatInfo.id}/messages/${messageId}`,
+          { method: "DELETE" },
+        );
+        const payload = (await response.json().catch(() => ({}))) as {
+          error?: string;
+          success?: boolean;
+        };
+
+        if (!response.ok || !payload.success) {
+          throw new Error(payload.error ?? "Failed to delete message");
+        }
+
+        setMessages(messages.slice(0, targetMessageIndex));
+        await refreshChats();
+      } catch (err) {
+        console.error("Failed to delete message:", err);
+        setDeleteMessageError(
+          err instanceof Error ? err.message : "Failed to delete message",
+        );
+      } finally {
+        setDeletingMessageId(null);
+      }
+    },
+    [
+      hasMessageActionInFlight,
+      messages,
+      session.id,
+      chatInfo.id,
+      setMessages,
+      refreshChats,
+    ],
+  );
+
+  const handleResendUserMessage = useCallback(
+    async (messageId: string) => {
+      if (hasMessageActionInFlight) {
+        return;
+      }
+
+      const targetMessageIndex = messages.findIndex(
+        (message) => message.id === messageId,
+      );
+      const targetMessage = messages[targetMessageIndex];
+      if (!targetMessage || targetMessage.role !== "user") {
+        return;
+      }
+
+      const resendText = targetMessage.parts
+        .filter(
+          (part): part is { type: "text"; text: string } =>
+            part.type === "text",
+        )
+        .map((part) => part.text)
+        .join("");
+      const resendFiles = targetMessage.parts
+        .filter((part): part is FileUIPart => part.type === "file")
+        .map((part) => ({
+          type: "file" as const,
+          mediaType: part.mediaType,
+          url: part.url,
+          ...(part.filename ? { filename: part.filename } : {}),
+        }));
+
+      if (!resendText.trim() && resendFiles.length === 0) {
+        return;
+      }
+
+      const confirmed = window.confirm(
+        "Resend this message? This will delete this message and everything after it.",
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      setDeleteMessageError(null);
+      setResendingMessageId(messageId);
+
+      try {
+        const response = await fetch(
+          `/api/sessions/${session.id}/chats/${chatInfo.id}/messages/${messageId}`,
+          { method: "DELETE" },
+        );
+        const payload = (await response.json().catch(() => ({}))) as {
+          error?: string;
+          success?: boolean;
+        };
+
+        if (!response.ok || !payload.success) {
+          throw new Error(payload.error ?? "Failed to resend message");
+        }
+
+        setMessages(messages.slice(0, targetMessageIndex));
+        setHasPendingResponse(true);
+        hasSeenAssistantRenderableContentRef.current = false;
+        void setChatStreaming(chatInfo.id, true);
+
+        try {
+          await sendMessage({
+            text: resendText,
+            files: resendFiles.length > 0 ? resendFiles : undefined,
+          });
+        } catch (err) {
+          setHasPendingResponse(false);
+          void setChatStreaming(chatInfo.id, false);
+          throw err;
+        }
+
+        await refreshChats();
+      } catch (err) {
+        console.error("Failed to resend message:", err);
+        setDeleteMessageError(
+          err instanceof Error ? err.message : "Failed to resend message",
+        );
+      } finally {
+        setResendingMessageId(null);
+      }
+    },
+    [
+      hasMessageActionInFlight,
+      messages,
+      session.id,
+      chatInfo.id,
+      setMessages,
+      setChatStreaming,
+      sendMessage,
+      refreshChats,
+    ],
+  );
 
   const waitForSandboxReady = useCallback(
     async (maxAttempts = 8): Promise<boolean> => {
@@ -1678,6 +1629,7 @@ export function SessionChatContent({
     requestMarkChatRead,
     refreshChats,
     checkBranchAndPr,
+    router,
   ]);
 
   // Track whether we've auto-attempted sandbox startup for this page load.
@@ -1931,15 +1883,6 @@ export function SessionChatContent({
     return { inputTokens: 0, outputTokens: 0 };
   }, [renderMessages]);
 
-  const contextLimit = useMemo(() => {
-    const modelId = chatInfo.modelId;
-    if (!modelId) {
-      return DEFAULT_CONTEXT_LIMIT;
-    }
-
-    return getModelContextLimit(modelId, models) ?? DEFAULT_CONTEXT_LIMIT;
-  }, [chatInfo.modelId, models]);
-
   // Detect pending AskUserQuestion tool calls
   const { hasPendingQuestion, pendingQuestionPart, questionToolCallId } =
     useMemo(() => {
@@ -2104,7 +2047,7 @@ export function SessionChatContent({
       <header className="border-b border-border px-3 py-2 md:px-4 md:py-3">
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2 md:gap-4">
-            <SidebarTrigger className="shrink-0" />
+            <SidebarTrigger className="shrink-0 sidebar:hidden" />
             <div className="flex min-w-0 items-center gap-2 text-sm">
               {session.repoName ? (
                 <>
@@ -2283,6 +2226,7 @@ export function SessionChatContent({
                   </Button>
                 ) : (
                   <Button
+                    variant="outline"
                     size="sm"
                     onClick={() => {
                       const prUrl = `https://github.com/${session.repoOwner}/${session.repoName}/pull/${session.prNumber}`;
@@ -2367,7 +2311,200 @@ export function SessionChatContent({
         <div ref={containerRef} className="h-full overflow-y-auto">
           <div className="mx-auto max-w-4xl overflow-hidden px-4 py-8">
             <div className="space-y-6">
-              {renderedMessageGroups}
+              {groupedRenderMessages.map(
+                ({ message: m, groups, isStreaming: isMessageStreaming }) => {
+                  return groups.map((group) => {
+                    if (group.type === "task-group") {
+                      return (
+                        <div
+                          key={`${m.id}-${group.renderKey}`}
+                          className="max-w-full"
+                        >
+                          <TaskGroupView
+                            taskParts={group.tasks}
+                            activeApprovalId={
+                              group.tasks.find(
+                                (t) => t.state === "approval-requested",
+                              )?.approval?.id ?? null
+                            }
+                            isStreaming={isMessageStreaming}
+                            onApprove={(id) =>
+                              addToolApprovalResponse({ id, approved: true })
+                            }
+                            onDeny={(id, reason) =>
+                              addToolApprovalResponse({
+                                id,
+                                approved: false,
+                                reason,
+                              })
+                            }
+                          />
+                        </div>
+                      );
+                    }
+
+                    const p = group.part;
+
+                    if (isReasoningUIPart(p)) {
+                      return (
+                        <div
+                          key={`${m.id}-${group.renderKey}`}
+                          className="flex justify-start"
+                        >
+                          <ThinkingBlock
+                            text={p.text}
+                            isStreaming={
+                              isMessageStreaming && p.state === "streaming"
+                            }
+                          />
+                        </div>
+                      );
+                    }
+
+                    if (p.type === "text") {
+                      return (
+                        <div
+                          key={`${m.id}-${group.renderKey}`}
+                          className={cn(
+                            "flex min-w-0",
+                            m.role === "user" ? "justify-end" : "justify-start",
+                          )}
+                        >
+                          {m.role === "user" ? (
+                            <div className="group relative w-fit min-w-0 max-w-[80%]">
+                              <div className="rounded-3xl bg-secondary px-4 py-2">
+                                <p className="whitespace-pre-wrap break-words">
+                                  {p.text}
+                                </p>
+                              </div>
+                              {group.index === 0 && (
+                                <div className="absolute -left-20 top-1/2 flex -translate-y-1/2 items-center gap-1 rounded-md bg-background/80 p-1 text-muted-foreground opacity-0 transition group-hover:opacity-100">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void handleResendUserMessage(m.id)
+                                    }
+                                    disabled={hasMessageActionInFlight}
+                                    aria-label="Resend this message and delete everything after it"
+                                    className="rounded p-1 transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                                  >
+                                    {resendingMessageId === m.id ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <RotateCcw className="h-4 w-4" />
+                                    )}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void handleDeleteUserMessage(m.id)
+                                    }
+                                    disabled={hasMessageActionInFlight}
+                                    aria-label="Delete this message and everything after it"
+                                    className="rounded p-1 transition hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40"
+                                  >
+                                    {deletingMessageId === m.id ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Trash2 className="h-4 w-4" />
+                                    )}
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="min-w-0 w-full overflow-hidden">
+                              <Streamdown
+                                animated={
+                                  isMessageStreaming
+                                    ? {
+                                        animation: "fadeIn",
+                                        duration: 250,
+                                        easing: "ease-out",
+                                      }
+                                    : undefined
+                                }
+                                mode={
+                                  isMessageStreaming ? "streaming" : "static"
+                                }
+                                isAnimating={isMessageStreaming}
+                                plugins={streamdownPlugins}
+                              >
+                                {p.text}
+                              </Streamdown>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+
+                    if (isToolUIPart(p)) {
+                      return (
+                        <div
+                          key={`${m.id}-${group.renderKey}`}
+                          className="max-w-full"
+                        >
+                          <ToolCall
+                            part={p as WebAgentUIToolPart}
+                            isStreaming={isMessageStreaming}
+                            onApprove={(id) =>
+                              addToolApprovalResponse({ id, approved: true })
+                            }
+                            onDeny={(id, reason) =>
+                              addToolApprovalResponse({
+                                id,
+                                approved: false,
+                                reason,
+                              })
+                            }
+                          />
+                        </div>
+                      );
+                    }
+
+                    // Render image attachments
+                    if (
+                      p.type === "file" &&
+                      p.mediaType?.startsWith("image/")
+                    ) {
+                      return (
+                        <div
+                          key={`${m.id}-${group.renderKey}`}
+                          className="flex justify-end"
+                        >
+                          <div className="group relative w-fit max-w-[80%]">
+                            {/* eslint-disable-next-line @next/next/no-img-element -- Data URLs not supported by next/image */}
+                            <img
+                              src={p.url}
+                              alt={p.filename ?? "Attached image"}
+                              className="max-h-64 rounded-lg"
+                            />
+                            {m.role === "user" && group.index === 0 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleDeleteUserMessage(m.id)
+                                }
+                                disabled={hasMessageActionInFlight}
+                                aria-label="Delete this message and everything after it"
+                                className="absolute -left-10 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                {deletingMessageId === m.id ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4" />
+                                )}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return null;
+                  });
+                },
+              )}
               {showThinkingIndicator && (
                 <div className="flex justify-start">
                   <ThinkingBlock text="" isStreaming />
@@ -2406,6 +2543,18 @@ export function SessionChatContent({
               <button
                 type="button"
                 onClick={() => setRestoreError(null)}
+                className="ml-2 rounded p-0.5 hover:bg-destructive/20"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+          {deleteMessageError && (
+            <div className="flex items-center justify-between rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <span>{deleteMessageError}</span>
+              <button
+                type="button"
+                onClick={() => setDeleteMessageError(null)}
                 className="ml-2 rounded p-0.5 hover:bg-destructive/20"
               >
                 <X className="h-4 w-4" />
@@ -2619,7 +2768,8 @@ export function SessionChatContent({
                     >
                       <ModelSelectorCompact
                         value={chatInfo.modelId}
-                        modelOptions={modelOptions}
+                        models={models}
+                        isLoading={modelsLoading}
                         onChange={(modelId) => {
                           void handleModelChange(modelId);
                         }}
@@ -2628,14 +2778,14 @@ export function SessionChatContent({
                   ) : (
                     chatInfo.modelId && (
                       <span className="text-xs text-muted-foreground/60">
-                        {selectedModelLabel}
+                        {chatInfo.modelId}
                       </span>
                     )
                   )}
                   <ContextUsageIndicator
                     inputTokens={tokenUsage.inputTokens}
                     outputTokens={tokenUsage.outputTokens}
-                    contextLimit={contextLimit}
+                    contextLimit={contextLimit ?? DEFAULT_CONTEXT_LIMIT}
                   />
                 </div>
 

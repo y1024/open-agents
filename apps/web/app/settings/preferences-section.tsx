@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
+import useSWR from "swr";
 import { type ThemePreference, useTheme } from "@/app/providers";
 import {
   DEFAULT_SANDBOX_TYPE,
@@ -22,9 +23,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { type ModelOption, useModelOptions } from "@/hooks/use-model-options";
 import { useUserPreferences } from "@/hooks/use-user-preferences";
-import { DEFAULT_MODEL_ID } from "@/lib/models";
+import {
+  type AvailableModel,
+  DEFAULT_MODEL_ID,
+  getModelDisplayName,
+} from "@/lib/models";
+import { fetcher } from "@/lib/swr";
+
+interface ModelsResponse {
+  models: AvailableModel[];
+}
 
 const SANDBOX_OPTIONS: Array<{ id: SandboxType; name: string }> = [
   { id: "hybrid", name: "Hybrid" },
@@ -40,25 +49,6 @@ const THEME_OPTIONS: Array<{ id: ThemePreference; name: string }> = [
 
 function isThemePreference(value: string): value is ThemePreference {
   return THEME_OPTIONS.some((option) => option.id === value);
-}
-
-function withMissingSelectedOption(
-  options: ModelOption[],
-  selectedModelId: string,
-): ModelOption[] {
-  if (options.some((option) => option.id === selectedModelId)) {
-    return options;
-  }
-
-  return [
-    {
-      id: selectedModelId,
-      label: `${selectedModelId} (missing)`,
-      description: "This model or variant no longer exists",
-      isVariant: selectedModelId.startsWith("variant:"),
-    },
-    ...options,
-  ];
 }
 
 export function PreferencesSectionSkeleton() {
@@ -115,48 +105,13 @@ export function PreferencesSectionSkeleton() {
 export function PreferencesSection() {
   const { theme, setTheme } = useTheme();
   const { preferences, loading, updatePreferences } = useUserPreferences();
-  const { modelOptions, loading: modelOptionsLoading } = useModelOptions();
+  const { data: modelsData, isLoading: modelsLoading } = useSWR<ModelsResponse>(
+    "/api/models",
+    fetcher,
+  );
   const [isSaving, setIsSaving] = useState(false);
 
-  const defaultModelValue = preferences?.defaultModelId ?? DEFAULT_MODEL_ID;
-  const subagentModelValue = preferences?.defaultSubagentModelId ?? "auto";
-
-  const modelOptionsWithVariants = useMemo(() => {
-    const userVariants = preferences?.modelVariants ?? [];
-
-    if (userVariants.length === 0) {
-      return modelOptions;
-    }
-
-    const optionIds = new Set(modelOptions.map((option) => option.id));
-    const missingVariantOptions: ModelOption[] = userVariants
-      .filter((variant) => !optionIds.has(variant.id))
-      .map((variant) => ({
-        id: variant.id,
-        label: variant.name,
-        description: `Variant of ${variant.baseModelId}`,
-        isVariant: true,
-      }));
-
-    return [...modelOptions, ...missingVariantOptions];
-  }, [modelOptions, preferences?.modelVariants]);
-
-  const defaultModelOptions = useMemo(
-    () =>
-      withMissingSelectedOption(modelOptionsWithVariants, defaultModelValue),
-    [defaultModelValue, modelOptionsWithVariants],
-  );
-
-  const subagentModelOptions = useMemo(
-    () =>
-      subagentModelValue === "auto"
-        ? modelOptionsWithVariants
-        : withMissingSelectedOption(
-            modelOptionsWithVariants,
-            subagentModelValue,
-          ),
-    [modelOptionsWithVariants, subagentModelValue],
-  );
+  const models = modelsData?.models ?? [];
 
   const handleThemeChange = (nextTheme: string) => {
     if (isThemePreference(nextTheme)) {
@@ -236,42 +191,41 @@ export function PreferencesSection() {
         <div className="grid gap-2">
           <Label htmlFor="model">Default Model</Label>
           <Select
-            value={defaultModelValue}
+            value={preferences?.defaultModelId ?? DEFAULT_MODEL_ID}
             onValueChange={handleModelChange}
-            disabled={isSaving || modelOptionsLoading}
+            disabled={isSaving || modelsLoading}
           >
             <SelectTrigger id="model" className="w-full max-w-xs">
               <SelectValue placeholder="Select a model" />
             </SelectTrigger>
             <SelectContent>
-              {defaultModelOptions.map((modelOption) => (
-                <SelectItem key={modelOption.id} value={modelOption.id}>
-                  {modelOption.label}
+              {models.map((model) => (
+                <SelectItem key={model.id} value={model.id}>
+                  {getModelDisplayName(model)}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">
-            The AI model used for new chats. Includes model variants from
-            Settings → Model Variants.
+            The AI model used for new chats.
           </p>
         </div>
 
         <div className="grid gap-2">
           <Label htmlFor="subagent-model">Subagent Model</Label>
           <Select
-            value={subagentModelValue}
+            value={preferences?.defaultSubagentModelId ?? "auto"}
             onValueChange={handleSubagentModelChange}
-            disabled={isSaving || modelOptionsLoading}
+            disabled={isSaving || modelsLoading}
           >
             <SelectTrigger id="subagent-model" className="w-full max-w-xs">
               <SelectValue placeholder="Select a model" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="auto">Same as main model</SelectItem>
-              {subagentModelOptions.map((modelOption) => (
-                <SelectItem key={modelOption.id} value={modelOption.id}>
-                  {modelOption.label}
+              {models.map((model) => (
+                <SelectItem key={model.id} value={model.id}>
+                  {getModelDisplayName(model)}
                 </SelectItem>
               ))}
             </SelectContent>
