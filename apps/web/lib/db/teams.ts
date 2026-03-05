@@ -1,11 +1,17 @@
 import { and, eq } from "drizzle-orm";
+import { nanoid } from "nanoid";
 import { db } from "./client";
 import { teamMembers, teams } from "./schema";
 
 const PERSONAL_TEAM_ID_PREFIX = "personal_";
+const COLLABORATION_TEAM_ID_PREFIX = "team_";
 
 function toPersonalTeamId(userId: string): string {
   return `${PERSONAL_TEAM_ID_PREFIX}${userId}`;
+}
+
+function toCollaborationTeamId(): string {
+  return `${COLLABORATION_TEAM_ID_PREFIX}${nanoid(12)}`;
 }
 
 function toPersonalTeamName(username: string): string {
@@ -73,6 +79,107 @@ export async function ensurePersonalTeamForUser(input: {
   }
 
   return personalTeam;
+}
+
+export async function getTeamById(teamId: string) {
+  return db.query.teams.findFirst({
+    where: eq(teams.id, teamId),
+  });
+}
+
+export async function getTeamMembership(userId: string, teamId: string) {
+  return db.query.teamMembers.findFirst({
+    where: and(eq(teamMembers.userId, userId), eq(teamMembers.teamId, teamId)),
+    columns: {
+      teamId: true,
+      userId: true,
+      role: true,
+    },
+  });
+}
+
+export async function createTeamForUser(input: {
+  ownerUserId: string;
+  name: string;
+}) {
+  return db.transaction(async (tx) => {
+    const now = new Date();
+    const teamId = toCollaborationTeamId();
+
+    const [createdTeam] = await tx
+      .insert(teams)
+      .values({
+        id: teamId,
+        name: input.name,
+        personalOwnerUserId: null,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning();
+
+    if (!createdTeam) {
+      throw new Error("Failed to create team");
+    }
+
+    await tx.insert(teamMembers).values({
+      teamId,
+      userId: input.ownerUserId,
+      role: "owner",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return createdTeam;
+  });
+}
+
+type AddUserToTeamResult = {
+  membership: {
+    teamId: string;
+    userId: string;
+    role: "owner" | "member";
+  };
+  created: boolean;
+};
+
+export async function addUserToTeam(input: {
+  teamId: string;
+  userId: string;
+  role?: "owner" | "member";
+}): Promise<AddUserToTeamResult> {
+  const now = new Date();
+  const [insertedMembership] = await db
+    .insert(teamMembers)
+    .values({
+      teamId: input.teamId,
+      userId: input.userId,
+      role: input.role ?? "member",
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoNothing({ target: [teamMembers.teamId, teamMembers.userId] })
+    .returning({
+      teamId: teamMembers.teamId,
+      userId: teamMembers.userId,
+      role: teamMembers.role,
+    });
+
+  if (insertedMembership) {
+    return { membership: insertedMembership, created: true };
+  }
+
+  const existingMembership = await getTeamMembership(
+    input.userId,
+    input.teamId,
+  );
+  if (!existingMembership) {
+    throw new Error("Failed to add team member");
+  }
+
+  return {
+    membership: existingMembership,
+    created: false,
+  };
 }
 
 export async function isUserMemberOfTeam(

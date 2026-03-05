@@ -16,6 +16,23 @@ export async function userExists(userId: string): Promise<boolean> {
   return result.length > 0;
 }
 
+export async function getUserByUsername(username: string) {
+  const trimmedUsername = username.trim();
+  if (!trimmedUsername) {
+    return null;
+  }
+
+  return db.query.users.findFirst({
+    where: eq(users.username, trimmedUsername),
+    columns: {
+      id: true,
+      username: true,
+      email: true,
+      name: true,
+    },
+  });
+}
+
 export async function upsertUser(userData: {
   provider: "github" | "vercel";
   externalId: string;

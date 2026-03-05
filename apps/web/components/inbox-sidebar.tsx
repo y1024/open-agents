@@ -9,6 +9,7 @@ import {
   Pencil,
   Plus,
   Settings,
+  UserPlus,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -31,6 +32,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -311,7 +313,8 @@ export function InboxSidebar({
   initialUser,
 }: InboxSidebarProps) {
   const router = useRouter();
-  const { session, teams, activeTeamId, setActiveTeam } = useSession();
+  const { session, teams, activeTeamId, setActiveTeam, refreshSession } =
+    useSession();
   const { isMobile, setOpenMobile } = useSidebar();
   const [showArchived, setShowArchived] = useState(false);
   const [archivedSessions, setArchivedSessions] = useState<SessionWithUnread[]>(
@@ -330,6 +333,16 @@ export function InboxSidebar({
   const [renaming, setRenaming] = useState(false);
   const [isSwitchingTeam, setIsSwitchingTeam] = useState(false);
   const [teamSwitchError, setTeamSwitchError] = useState<string | null>(null);
+  const [createTeamOpen, setCreateTeamOpen] = useState(false);
+  const [createTeamName, setCreateTeamName] = useState("");
+  const [createTeamError, setCreateTeamError] = useState<string | null>(null);
+  const [isCreatingTeam, setIsCreatingTeam] = useState(false);
+  const [inviteMemberOpen, setInviteMemberOpen] = useState(false);
+  const [inviteUsername, setInviteUsername] = useState("");
+  const [inviteMemberError, setInviteMemberError] = useState<string | null>(
+    null,
+  );
+  const [isInvitingMember, setIsInvitingMember] = useState(false);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
 
   const fetchArchivedSessionsPage = useCallback(
@@ -420,6 +433,9 @@ export function InboxSidebar({
   const currentTeam = useMemo(
     () => teams.find((team) => team.id === activeTeamId) ?? teams[0],
     [activeTeamId, teams],
+  );
+  const canInviteMembers = Boolean(
+    currentTeam && !currentTeam.isPersonal && currentTeam.role === "owner",
   );
 
   const handleSessionClick = useCallback(
@@ -513,6 +529,119 @@ export function InboxSidebar({
       setOpenMobile,
     ],
   );
+
+  const handleOpenCreateTeam = useCallback(() => {
+    setCreateTeamName("");
+    setCreateTeamError(null);
+    setCreateTeamOpen(true);
+  }, []);
+
+  const handleCreateTeam = useCallback(async () => {
+    const teamName = createTeamName.trim();
+    if (!teamName) {
+      setCreateTeamError("Team name is required");
+      return;
+    }
+
+    setCreateTeamError(null);
+    setIsCreatingTeam(true);
+
+    try {
+      const response = await fetch("/api/teams", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: teamName,
+          switchToTeam: true,
+        }),
+      });
+      const data = (await response.json()) as { error?: string };
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Failed to create team");
+      }
+
+      await refreshSession();
+      await onTeamSwitch?.();
+
+      setShowArchived(false);
+      setArchivedSessions([]);
+      setHasMoreArchivedSessions(false);
+      setArchivedSessionsError(null);
+      setCreateTeamOpen(false);
+      setCreateTeamName("");
+
+      if (activeSessionId) {
+        router.push("/sessions");
+        router.refresh();
+      }
+
+      if (isMobile) {
+        setOpenMobile(false);
+      }
+    } catch (error) {
+      setCreateTeamError(
+        error instanceof Error ? error.message : "Failed to create team",
+      );
+    } finally {
+      setIsCreatingTeam(false);
+    }
+  }, [
+    activeSessionId,
+    createTeamName,
+    isMobile,
+    onTeamSwitch,
+    refreshSession,
+    router,
+    setOpenMobile,
+  ]);
+
+  const handleOpenInviteMember = useCallback(() => {
+    if (!canInviteMembers) {
+      return;
+    }
+
+    setInviteUsername("");
+    setInviteMemberError(null);
+    setInviteMemberOpen(true);
+  }, [canInviteMembers]);
+
+  const handleInviteMember = useCallback(async () => {
+    if (!currentTeam) {
+      return;
+    }
+
+    const username = inviteUsername.trim();
+    if (!username) {
+      setInviteMemberError("Username is required");
+      return;
+    }
+
+    setInviteMemberError(null);
+    setIsInvitingMember(true);
+
+    try {
+      const response = await fetch(`/api/teams/${currentTeam.id}/members`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username }),
+      });
+      const data = (await response.json()) as { error?: string };
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Failed to invite member");
+      }
+
+      setInviteMemberOpen(false);
+      setInviteUsername("");
+    } catch (error) {
+      setInviteMemberError(
+        error instanceof Error ? error.message : "Failed to invite member",
+      );
+    } finally {
+      setIsInvitingMember(false);
+    }
+  }, [currentTeam, inviteUsername]);
 
   const closeRenameDialog = useCallback(() => {
     setRenameDialogSession(null);
@@ -767,6 +896,21 @@ export function InboxSidebar({
                       </DropdownMenuItem>
                     );
                   })}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    disabled={isCreatingTeam}
+                    onClick={handleOpenCreateTeam}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Create team
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    disabled={!canInviteMembers || isInvitingMember}
+                    onClick={handleOpenInviteMember}
+                  >
+                    <UserPlus className="h-3.5 w-3.5" />
+                    Invite member
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
               {teamSwitchError ? (
@@ -851,6 +995,116 @@ export function InboxSidebar({
               </Button>
               <Button type="submit" disabled={isSaveDisabled}>
                 {renaming ? "Saving..." : "Save"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={createTeamOpen}
+        onOpenChange={(open) => {
+          setCreateTeamOpen(open);
+          if (!open) {
+            setCreateTeamError(null);
+            setCreateTeamName("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create team</DialogTitle>
+            <DialogDescription>
+              Create a shared team workspace for collaborative sessions.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void handleCreateTeam();
+            }}
+            className="space-y-4"
+          >
+            <Input
+              value={createTeamName}
+              onChange={(e) => setCreateTeamName(e.target.value)}
+              placeholder="Team name"
+              maxLength={80}
+              disabled={isCreatingTeam}
+            />
+            {createTeamError ? (
+              <p className="text-xs text-red-500">{createTeamError}</p>
+            ) : null}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCreateTeamOpen(false)}
+                disabled={isCreatingTeam}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={isCreatingTeam || createTeamName.trim().length === 0}
+              >
+                {isCreatingTeam ? "Creating..." : "Create team"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={inviteMemberOpen}
+        onOpenChange={(open) => {
+          setInviteMemberOpen(open);
+          if (!open) {
+            setInviteMemberError(null);
+            setInviteUsername("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Invite member</DialogTitle>
+            <DialogDescription>
+              Add a teammate by username to {currentTeam?.name ?? "this team"}.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void handleInviteMember();
+            }}
+            className="space-y-4"
+          >
+            <Input
+              value={inviteUsername}
+              onChange={(e) => setInviteUsername(e.target.value)}
+              placeholder="Username"
+              maxLength={80}
+              disabled={isInvitingMember}
+            />
+            {inviteMemberError ? (
+              <p className="text-xs text-red-500">{inviteMemberError}</p>
+            ) : null}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setInviteMemberOpen(false)}
+                disabled={isInvitingMember}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={
+                  isInvitingMember || inviteUsername.trim().length === 0
+                }
+              >
+                {isInvitingMember ? "Inviting..." : "Invite"}
               </Button>
             </DialogFooter>
           </form>
