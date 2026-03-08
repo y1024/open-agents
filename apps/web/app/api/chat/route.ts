@@ -22,6 +22,7 @@ import {
   getChatById,
   getSessionById,
   isFirstChatMessage,
+  persistAssistantMessageSanitization,
   touchChat,
   updateChat,
   updateChatAssistantActivity,
@@ -34,6 +35,10 @@ import { getUserGitHubToken } from "@/lib/github/user-token";
 import { getUserPreferences } from "@/lib/db/user-preferences";
 import { resolveModelSelection } from "@/lib/model-variants";
 import { DEFAULT_MODEL_ID } from "@/lib/models";
+import {
+  deriveAssistantMessageSanitizationChanges,
+  stripInvalidOpenAIReasoningPartsForRetry,
+} from "@/lib/openai-reasoning-retry";
 import { resumableStreamContext } from "@/lib/resumable-stream-context";
 import { buildActiveLifecycleUpdate } from "@/lib/sandbox/lifecycle";
 import { isSandboxActive } from "@/lib/sandbox/utils";
@@ -244,7 +249,8 @@ export async function POST(req: Request) {
       activityAt: requestStartedAt,
     }),
   });
-  const modelMessages = await convertToModelMessages(messages, {
+  let requestMessages = messages;
+  let modelMessages = await convertToModelMessages(requestMessages, {
     ignoreIncompleteToolCalls: true,
     tools: webAgent.tools,
   });
@@ -353,8 +359,8 @@ export async function POST(req: Request) {
 
   // Save the latest incoming user message immediately (incremental persistence).
   // Assistant snapshots are persisted after stream ownership is atomically claimed.
-  if (chatId && messages.length > 0) {
-    const latestMessage = messages[messages.length - 1];
+  if (chatId && requestMessages.length > 0) {
+    const latestMessage = requestMessages[requestMessages.length - 1];
     if (
       latestMessage &&
       (latestMessage.role === "user" || latestMessage.role === "assistant") &&
@@ -478,7 +484,8 @@ export async function POST(req: Request) {
   const requestedLastInputTokens = toPositiveInputTokens(
     requestedCompactionContext?.lastInputTokens,
   );
-  const inferredLastInputTokens = extractLastInputTokensFromMessages(messages);
+  const inferredLastInputTokens =
+    extractLastInputTokensFromMessages(requestMessages);
 
   const compactionContext = {
     contextLimit: requestedContextLimit ?? DEFAULT_CONTEXT_LIMIT,
@@ -528,9 +535,8 @@ export async function POST(req: Request) {
     }
   };
 
-  let result;
-  try {
-    result = await webAgent.stream({
+  const streamAgentResponse = () =>
+    webAgent.stream({
       messages: modelMessages,
       options: {
         sandbox,
@@ -547,11 +553,62 @@ export async function POST(req: Request) {
       },
       abortSignal: controller.signal,
     });
+
+  let result;
+  try {
+    result = await streamAgentResponse();
   } catch (error) {
-    clearTimeout(timeoutHandle);
-    closeStopSignal();
-    await clearOwnedStreamToken();
-    throw error;
+    const retryPayload = stripInvalidOpenAIReasoningPartsForRetry(
+      requestMessages,
+      error,
+    );
+
+    if (!retryPayload) {
+      clearTimeout(timeoutHandle);
+      closeStopSignal();
+      await clearOwnedStreamToken();
+      throw error;
+    }
+
+    console.warn(
+      `[chat] Retrying stream after removing OpenAI reasoning item ${retryPayload.removedItemId}`,
+    );
+
+    const retryMessages = retryPayload.messages;
+    const sanitizationChanges = deriveAssistantMessageSanitizationChanges(
+      requestMessages,
+      retryMessages,
+    );
+
+    if (sanitizationChanges) {
+      try {
+        await persistAssistantMessageSanitization(chatId, sanitizationChanges);
+      } catch (persistError) {
+        console.error(
+          "[chat] Failed to persist sanitized assistant history before retry:",
+          persistError,
+        );
+      }
+    }
+
+    requestMessages = retryMessages;
+    modelMessages = await convertToModelMessages(requestMessages, {
+      ignoreIncompleteToolCalls: true,
+      tools: webAgent.tools,
+    });
+
+    const latestRequestMessage = requestMessages[requestMessages.length - 1];
+    pendingAssistantSnapshot =
+      latestRequestMessage?.role === "assistant" ? latestRequestMessage : null;
+
+    try {
+      result = await streamAgentResponse();
+    } catch (retryError) {
+      clearTimeout(timeoutHandle);
+      closeStopSignal();
+      await clearOwnedStreamToken();
+      throw retryError;
+    }
   }
 
   void result.consumeStream().then(
@@ -572,7 +629,7 @@ export async function POST(req: Request) {
 
   // Save assistant message on finish, and persist sandbox state if applicable
   return result.toUIMessageStreamResponse({
-    originalMessages: messages,
+    originalMessages: requestMessages,
     generateMessageId: nanoid,
     messageMetadata: ({ part }) => {
       // Track per-step usage from finish-step events. The last step's input

@@ -474,6 +474,71 @@ export async function getChatMessages(chatId: string) {
   });
 }
 
+export interface AssistantMessageSanitizationPayload {
+  updatedAssistantMessages: Array<Pick<NewChatMessage, "id" | "parts">>;
+  removedAssistantMessageIds: string[];
+}
+
+export async function persistAssistantMessageSanitization(
+  chatId: string,
+  payload: AssistantMessageSanitizationPayload,
+): Promise<void> {
+  const { updatedAssistantMessages, removedAssistantMessageIds } = payload;
+  const hasUpdates = updatedAssistantMessages.length > 0;
+  const hasRemovals = removedAssistantMessageIds.length > 0;
+
+  if (!hasUpdates && !hasRemovals) {
+    return;
+  }
+
+  await db.transaction(async (tx) => {
+    for (const updatedMessage of updatedAssistantMessages) {
+      await tx
+        .update(chatMessages)
+        .set({ parts: updatedMessage.parts })
+        .where(
+          and(
+            eq(chatMessages.chatId, chatId),
+            eq(chatMessages.id, updatedMessage.id),
+            eq(chatMessages.role, "assistant"),
+          ),
+        );
+    }
+
+    if (hasRemovals) {
+      await tx
+        .delete(chatMessages)
+        .where(
+          and(
+            eq(chatMessages.chatId, chatId),
+            eq(chatMessages.role, "assistant"),
+            inArray(chatMessages.id, removedAssistantMessageIds),
+          ),
+        );
+    }
+
+    const [latestAssistantMessage] = await tx
+      .select({ createdAt: chatMessages.createdAt })
+      .from(chatMessages)
+      .where(
+        and(
+          eq(chatMessages.chatId, chatId),
+          eq(chatMessages.role, "assistant"),
+        ),
+      )
+      .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
+      .limit(1);
+
+    await tx
+      .update(chats)
+      .set({
+        lastAssistantMessageAt: latestAssistantMessage?.createdAt ?? null,
+        updatedAt: new Date(),
+      })
+      .where(eq(chats.id, chatId));
+  });
+}
+
 type DeleteChatMessageAndFollowingResult =
   | { status: "not_found" }
   | { status: "not_user_message" }
