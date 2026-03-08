@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import type { Chat, Session } from "@/lib/db/schema";
 import { fetcher } from "@/lib/swr";
@@ -90,12 +90,14 @@ export function useSessions(options?: {
     ? "/api/sessions"
     : "/api/sessions?status=active";
 
+  const initialData = options?.initialData;
+
   const { data, error, isLoading, mutate } = useSWR<SessionsResponse>(
     enabled ? "/api/sessions" : null,
     () => fetcher<SessionsResponse>(sessionsEndpoint),
     {
-      fallbackData: options?.initialData,
-      revalidateOnMount: options?.initialData ? false : undefined,
+      fallbackData: initialData,
+      revalidateOnMount: initialData ? false : undefined,
       refreshInterval: (latestData) => {
         const hasStreamingSession = latestData?.sessions.some(
           (s) => s.hasStreaming,
@@ -108,11 +110,21 @@ export function useSessions(options?: {
   );
   const { mutate: globalMutate } = useSWRConfig();
 
+  useEffect(() => {
+    if (!enabled || !initialData) {
+      return;
+    }
+
+    void mutate((current) => current ?? initialData, { revalidate: false });
+  }, [enabled, initialData, mutate]);
+
   const sessions = data?.sessions ?? [];
   const archivedCount = data?.archivedCount ?? 0;
 
   const createSession = useCallback(
     async (input: CreateSessionInput) => {
+      const previousData = cloneSessionsResponse(data);
+
       const res = await fetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -148,19 +160,23 @@ export function useSessions(options?: {
       );
 
       await mutate(
-        (current) => ({
-          sessions: [
-            {
-              ...createdSession,
-              hasUnread: false,
-              hasStreaming: false,
-              latestChatId: createdChat.id,
-              lastActivityAt: createdChat.updatedAt,
-            },
-            ...(current?.sessions ?? []),
-          ],
-          archivedCount: current?.archivedCount,
-        }),
+        (current) => {
+          const source = current ?? previousData;
+
+          return {
+            sessions: [
+              {
+                ...createdSession,
+                hasUnread: false,
+                hasStreaming: false,
+                latestChatId: createdChat.id,
+                lastActivityAt: createdChat.updatedAt,
+              },
+              ...(source?.sessions ?? []),
+            ],
+            archivedCount: source?.archivedCount,
+          };
+        },
         { revalidate: false },
       );
 
@@ -169,7 +185,7 @@ export function useSessions(options?: {
         chat: createdChat,
       } satisfies CreateSessionResponse;
     },
-    [globalMutate, mutate],
+    [data, globalMutate, mutate],
   );
 
   const renameSession = useCallback(
@@ -178,13 +194,14 @@ export function useSessions(options?: {
 
       await mutate(
         (current) => {
-          if (!current) {
-            return current;
+          const source = current ?? previousData;
+          if (!source) {
+            return source;
           }
 
           return {
-            ...current,
-            sessions: current.sessions.map((session) =>
+            ...source,
+            sessions: source.sessions.map((session) =>
               session.id === sessionId ? { ...session, title } : session,
             ),
           };
@@ -253,19 +270,20 @@ export function useSessions(options?: {
 
       await mutate(
         (current) => {
-          if (!current) {
-            return current;
+          const source = current ?? previousData;
+          if (!source) {
+            return source;
           }
 
           const nextArchivedCount =
             hadSession && !wasArchived
-              ? (current.archivedCount ?? 0) + 1
-              : current.archivedCount;
+              ? (source.archivedCount ?? 0) + 1
+              : source.archivedCount;
 
           if (!includeArchived) {
             return {
-              ...current,
-              sessions: current.sessions.filter(
+              ...source,
+              sessions: source.sessions.filter(
                 (session) => session.id !== sessionId,
               ),
               archivedCount: nextArchivedCount,
@@ -273,9 +291,9 @@ export function useSessions(options?: {
           }
 
           return {
-            ...current,
+            ...source,
             archivedCount: nextArchivedCount,
-            sessions: current.sessions.map((session) =>
+            sessions: source.sessions.map((session) =>
               session.id === sessionId
                 ? { ...session, status: "archived" }
                 : session,
