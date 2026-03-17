@@ -9,6 +9,13 @@ export type ChatStreamingProbeResponse = {
 
 export type StreamRecoveryDecision = "none" | "retry-error" | "probe";
 
+/**
+ * Whether recovery should be triggered on visibility/focus events.
+ * `isVisibilityRecovery` is true when called from a visibilitychange or
+ * focus event — in that case we also probe when the chat appears idle
+ * ("ready") because the browser may have silently killed the connection
+ * while the tab was backgrounded.
+ */
 export function getStreamRecoveryDecision(options: {
   now: number;
   lastRecoveryAt: number;
@@ -16,6 +23,7 @@ export function getStreamRecoveryDecision(options: {
   hasAssistantRenderableContent: boolean;
   inFlightStartedAt: number | null;
   isProbeInFlight: boolean;
+  isVisibilityRecovery?: boolean;
   minIntervalMs?: number;
   stallMs?: number;
 }): StreamRecoveryDecision {
@@ -26,6 +34,7 @@ export function getStreamRecoveryDecision(options: {
     hasAssistantRenderableContent,
     inFlightStartedAt,
     isProbeInFlight,
+    isVisibilityRecovery = false,
     minIntervalMs = STREAM_RECOVERY_MIN_INTERVAL_MS,
     stallMs = STREAM_RECOVERY_STALL_MS,
   } = options;
@@ -36,6 +45,16 @@ export function getStreamRecoveryDecision(options: {
 
   if (status === "error") {
     return "retry-error";
+  }
+
+  // When the tab regains visibility and the chat looks idle, probe the
+  // server to check if a workflow is still running. The browser may have
+  // silently dropped the connection while the tab was backgrounded.
+  if (isVisibilityRecovery && status === "ready") {
+    if (isProbeInFlight) {
+      return "none";
+    }
+    return "probe";
   }
 
   if (status !== "submitted" || hasAssistantRenderableContent) {

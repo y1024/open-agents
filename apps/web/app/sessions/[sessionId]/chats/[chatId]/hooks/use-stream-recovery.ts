@@ -38,8 +38,8 @@ export function useStreamRecovery({
   // Keep the recovery logic in a ref so event-listener effects never
   // churn during streaming. The ref is updated on every render (cheap) while
   // the stable wrapper below keeps a constant identity for effects.
-  const maybeRecoverStreamRef = useRef(() => {});
-  maybeRecoverStreamRef.current = () => {
+  const maybeRecoverStreamRef = useRef((_opts?: { isVisibilityRecovery?: boolean }) => {});
+  maybeRecoverStreamRef.current = (opts?: { isVisibilityRecovery?: boolean }) => {
     const now = Date.now();
     const recoveryDecision = getStreamRecoveryDecision({
       now,
@@ -48,6 +48,7 @@ export function useStreamRecovery({
       hasAssistantRenderableContent,
       inFlightStartedAt: inFlightStartedAtRef.current,
       isProbeInFlight: streamRecoveryProbeInFlightRef.current,
+      isVisibilityRecovery: opts?.isVisibilityRecovery,
     });
 
     if (recoveryDecision === "none") {
@@ -91,10 +92,14 @@ export function useStreamRecovery({
     })();
   };
 
-  // Stable identity wrapper – safe to use in effect dependency arrays without
+  // Stable identity wrappers – safe to use in effect dependency arrays without
   // causing teardown/re-register cycles.
   const maybeRecoverStream = useCallback(() => {
     maybeRecoverStreamRef.current();
+  }, []);
+
+  const maybeRecoverStreamOnVisibility = useCallback(() => {
+    maybeRecoverStreamRef.current({ isVisibilityRecovery: true });
   }, []);
 
   useEffect(() => {
@@ -109,17 +114,18 @@ export function useStreamRecovery({
   }, [isChatInFlight, chatId]);
 
   // Recover from transient connection drops when the tab regains visibility
-  // or the network comes back. The listeners are registered once because
-  // maybeRecoverStream has a stable identity (delegates to a ref internally).
+  // or the network comes back. Visibility/focus events pass
+  // isVisibilityRecovery so the policy also probes when the chat looks idle
+  // (the browser may have silently killed the connection while backgrounded).
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === "visible") {
-        maybeRecoverStream();
+        maybeRecoverStreamOnVisibility();
       }
     };
 
     const onFocus = () => {
-      maybeRecoverStream();
+      maybeRecoverStreamOnVisibility();
     };
 
     document.addEventListener("visibilitychange", onVisible);
@@ -130,7 +136,7 @@ export function useStreamRecovery({
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("online", maybeRecoverStream);
     };
-  }, [maybeRecoverStream]);
+  }, [maybeRecoverStream, maybeRecoverStreamOnVisibility]);
 
   useEffect(() => {
     const isDocumentVisible =

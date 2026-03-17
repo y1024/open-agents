@@ -101,6 +101,48 @@ describe("getStreamRecoveryDecision", () => {
 
     expect(decision).toBe("probe");
   });
+
+  test("probes on visibility recovery when chat is ready", () => {
+    const decision = getStreamRecoveryDecision({
+      now,
+      lastRecoveryAt: now - STREAM_RECOVERY_MIN_INTERVAL_MS,
+      status: "ready",
+      hasAssistantRenderableContent: true,
+      inFlightStartedAt: null,
+      isProbeInFlight: false,
+      isVisibilityRecovery: true,
+    });
+
+    expect(decision).toBe("probe");
+  });
+
+  test("does not probe on visibility recovery when already probing", () => {
+    const decision = getStreamRecoveryDecision({
+      now,
+      lastRecoveryAt: now - STREAM_RECOVERY_MIN_INTERVAL_MS,
+      status: "ready",
+      hasAssistantRenderableContent: true,
+      inFlightStartedAt: null,
+      isProbeInFlight: true,
+      isVisibilityRecovery: true,
+    });
+
+    expect(decision).toBe("none");
+  });
+
+  test("does not probe ready status without visibility flag", () => {
+    const decision = getStreamRecoveryDecision({
+      now,
+      lastRecoveryAt: now - STREAM_RECOVERY_MIN_INTERVAL_MS,
+      status: "ready",
+      hasAssistantRenderableContent: true,
+      inFlightStartedAt: null,
+      isProbeInFlight: false,
+      isVisibilityRecovery: false,
+    });
+
+    expect(decision).toBe("none");
+  });
 });
 
 describe("shouldScheduleStallRecovery", () => {
