@@ -10,7 +10,11 @@ import {
 import type { OpenHarnessAgentCallOptions } from "@open-harness/agent";
 import { getWorkflowMetadata, getWritable } from "workflow";
 import { getRun } from "workflow/api";
-import type { WebAgentUIMessage, WebAgentMessageMetadata } from "@/app/types";
+import type {
+  WebAgentMessageMetadata,
+  WebAgentStepFinishMetadata,
+  WebAgentUIMessage,
+} from "@/app/types";
 import {
   clearActiveStream,
   persistAssistantMessage,
@@ -215,6 +219,12 @@ const runAgentStep = async (
   try {
     let responseMessage: WebAgentUIMessage | undefined;
     let lastStepUsage: LanguageModelUsage | undefined;
+    const lastOriginalMessage = originalMessages.at(-1);
+    const existingStepFinishReasons: WebAgentStepFinishMetadata[] =
+      lastOriginalMessage?.role === "assistant"
+        ? [...(lastOriginalMessage.metadata?.stepFinishReasons ?? [])]
+        : [];
+    let stepFinishReasons = existingStepFinishReasons;
 
     const result = await webAgent.stream({
       messages,
@@ -230,9 +240,19 @@ const runAgentStep = async (
       messageMetadata: ({ part: streamPart }) => {
         if (streamPart.type === "finish-step") {
           lastStepUsage = streamPart.usage;
+          stepFinishReasons = [
+            ...stepFinishReasons,
+            {
+              finishReason: streamPart.finishReason,
+              rawFinishReason: streamPart.rawFinishReason,
+            },
+          ];
           return {
             lastStepUsage,
             totalMessageUsage: undefined,
+            lastStepFinishReason: streamPart.finishReason,
+            lastStepRawFinishReason: streamPart.rawFinishReason,
+            stepFinishReasons,
           } satisfies WebAgentMessageMetadata;
         }
         return undefined;

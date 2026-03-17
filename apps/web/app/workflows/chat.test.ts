@@ -52,25 +52,43 @@ mock.module("@/app/config", () => ({
   webAgent: {
     tools: {},
     stream: async () => {
-      const assistantMessage = {
-        id: "assistant-1",
-        role: "assistant",
-        parts: [{ type: "text", text: "Hello!" }],
-        metadata: {},
-      };
-
       return {
         toUIMessageStream: (opts: {
           sendStart?: boolean;
           sendFinish?: boolean;
+          originalMessages?: Array<Record<string, unknown>>;
+          messageMetadata?: (args: { part: Record<string, unknown> }) => unknown;
           onFinish?: (args: { responseMessage: unknown }) => void;
         }) => {
+          const priorAssistantMessage = opts.originalMessages?.at(-1);
+          const assistantMessage =
+            priorAssistantMessage?.role === "assistant"
+              ? structuredClone(priorAssistantMessage)
+              : {
+                  id: "assistant-1",
+                  role: "assistant",
+                  parts: [{ type: "text", text: "Hello!" }],
+                  metadata: {},
+                };
+
           streamOnFinishCallback = opts.onFinish;
           // Return an async iterable that yields parts and calls onFinish
           return {
             async *[Symbol.asyncIterator]() {
               for (const part of agentStreamParts) {
                 yield part;
+
+                const metadata = opts.messageMetadata?.({ part });
+                if (metadata) {
+                  assistantMessage.metadata = {
+                    ...assistantMessage.metadata,
+                    ...(metadata as Record<string, unknown>),
+                  };
+                  yield {
+                    type: "message-metadata",
+                    messageMetadata: metadata,
+                  };
+                }
               }
               if (streamOnFinishCallback) {
                 streamOnFinishCallback({
@@ -180,6 +198,52 @@ describe("runAgentWorkflow", () => {
     const rwCalls = spies.recordWorkflowUsage.mock.calls as unknown[][];
     expect(rwCalls[0][0]).toBe("user-1");
     expect(rwCalls[0][1]).toBe("gpt-4");
+  });
+
+  test("persists raw finish reasons for each agent step in message metadata", async () => {
+    agentFinishReason = "tool-calls";
+    agentStreamParts = [
+      { type: "text-delta", textDelta: "Hi" },
+      {
+        type: "finish-step",
+        finishReason: "tool-calls",
+        rawFinishReason: "provider_tool_use",
+        usage: agentTotalUsage,
+      },
+    ];
+
+    await runAgentWorkflow(
+      makeOptions({
+        maxSteps: 2,
+      }),
+    );
+
+    const persistCalls = spies.persistAssistantMessage.mock.calls as unknown[][];
+    const persistedMessage = persistCalls.at(-1)?.[1] as {
+      metadata?: {
+        lastStepFinishReason?: string;
+        lastStepRawFinishReason?: string;
+        stepFinishReasons?: Array<{
+          finishReason: string;
+          rawFinishReason?: string;
+        }>;
+      };
+    };
+
+    expect(persistedMessage.metadata?.lastStepFinishReason).toBe("tool-calls");
+    expect(persistedMessage.metadata?.lastStepRawFinishReason).toBe(
+      "provider_tool_use",
+    );
+    expect(persistedMessage.metadata?.stepFinishReasons).toEqual([
+      {
+        finishReason: "tool-calls",
+        rawFinishReason: "provider_tool_use",
+      },
+      {
+        finishReason: "tool-calls",
+        rawFinishReason: "provider_tool_use",
+      },
+    ]);
   });
 
   test("persists sandbox state when sandbox is present", async () => {
