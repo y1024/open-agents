@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertTriangle,
   Check,
   CheckCircle2,
   Clock3,
@@ -74,8 +75,12 @@ export function MergePrDialog({
   const [isLoadingReadiness, setIsLoadingReadiness] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [forceConfirming, setForceConfirming] = useState(false);
 
   const readinessRequestIdRef = useRef(0);
+  const forceConfirmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const loadReadiness = useCallback(async () => {
     const requestId = readinessRequestIdRef.current + 1;
@@ -133,6 +138,11 @@ export function MergePrDialog({
       setDeleteBranch(true);
       setMergeMethod("squash");
       setIsLoadingReadiness(false);
+      setForceConfirming(false);
+      if (forceConfirmTimeoutRef.current) {
+        clearTimeout(forceConfirmTimeoutRef.current);
+        forceConfirmTimeoutRef.current = null;
+      }
       return;
     }
 
@@ -152,7 +162,7 @@ export function MergePrDialog({
     }
   }, [pullRequestUrl]);
 
-  const handleMerge = async () => {
+  const handleMerge = async (force = false) => {
     if (!readiness?.pr) {
       setError("No pull request found for this session.");
       return;
@@ -172,6 +182,7 @@ export function MergePrDialog({
           mergeMethod,
           deleteBranch,
           expectedHeadSha: readiness.pr.headSha,
+          ...(force ? { force: true } : {}),
         }),
       });
 
@@ -211,6 +222,32 @@ export function MergePrDialog({
       );
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // Whether the user can bypass failing checks via force merge
+  const canForce =
+    readiness !== null &&
+    !readiness.canMerge &&
+    readiness.pr !== null &&
+    !isLoadingReadiness;
+
+  const handleForceClick = () => {
+    if (forceConfirming) {
+      // Second click – actually merge with force
+      if (forceConfirmTimeoutRef.current) {
+        clearTimeout(forceConfirmTimeoutRef.current);
+        forceConfirmTimeoutRef.current = null;
+      }
+      setForceConfirming(false);
+      void handleMerge(true);
+    } else {
+      // First click – enter confirmation state
+      setForceConfirming(true);
+      forceConfirmTimeoutRef.current = setTimeout(() => {
+        setForceConfirming(false);
+        forceConfirmTimeoutRef.current = null;
+      }, 5000);
     }
   };
 
@@ -409,28 +446,58 @@ export function MergePrDialog({
           >
             Cancel
           </Button>
-          <Button
-            onClick={handleMerge}
-            disabled={
-              isSubmitting ||
-              isLoadingReadiness ||
-              !readiness ||
-              !canMerge ||
-              !readiness.pr
-            }
-          >
-            {isSubmitting ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Merging...
-              </>
-            ) : (
-              <>
-                <Check className="mr-2 h-4 w-4" />
-                Confirm Merge & Archive
-              </>
-            )}
-          </Button>
+          {canMerge ? (
+            <Button
+              onClick={() => void handleMerge()}
+              disabled={
+                isSubmitting ||
+                isLoadingReadiness ||
+                !readiness ||
+                !readiness.pr
+              }
+            >
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Merging...
+                </>
+              ) : (
+                <>
+                  <Check className="mr-2 h-4 w-4" />
+                  Confirm Merge & Archive
+                </>
+              )}
+            </Button>
+          ) : (
+            <Button
+              variant="destructive"
+              onClick={handleForceClick}
+              disabled={
+                isSubmitting ||
+                isLoadingReadiness ||
+                !readiness ||
+                !canForce ||
+                !readiness.pr
+              }
+            >
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Merging...
+                </>
+              ) : forceConfirming ? (
+                <>
+                  <AlertTriangle className="mr-2 h-4 w-4" />
+                  Click again to confirm
+                </>
+              ) : (
+                <>
+                  <AlertTriangle className="mr-2 h-4 w-4" />
+                  Merge without passing checks
+                </>
+              )}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

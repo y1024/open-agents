@@ -21,6 +21,7 @@ interface MergePullRequestRequest {
   commitMessage?: string;
   deleteBranch?: boolean;
   expectedHeadSha?: string;
+  force?: boolean;
 }
 
 export type MergePullRequestResponse = {
@@ -56,6 +57,7 @@ function parseRequestBody(value: unknown): MergePullRequestRequest {
     typeof record.expectedHeadSha === "string"
       ? record.expectedHeadSha
       : undefined;
+  const force = typeof record.force === "boolean" ? record.force : undefined;
 
   return {
     mergeMethod,
@@ -63,6 +65,7 @@ function parseRequestBody(value: unknown): MergePullRequestRequest {
     commitMessage,
     deleteBranch,
     expectedHeadSha,
+    force,
   };
 }
 
@@ -180,7 +183,7 @@ export async function POST(req: Request, context: RouteContext) {
     );
   }
 
-  if (!readiness.canMerge) {
+  if (!readiness.canMerge && !parsedBody.force) {
     return Response.json(
       {
         error: readiness.reasons.join(". "),
