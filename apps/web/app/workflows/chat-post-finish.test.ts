@@ -209,12 +209,13 @@ describe("persistAssistantMessage", () => {
     expect(spies.updateChatAssistantActivity).not.toHaveBeenCalled();
   });
 
-  test("skips activity update on update status", async () => {
+  test("updates activity on update status", async () => {
     upsertChatMessageScopedResult = { status: "updated" };
 
     await persistAssistantMessage("chat-1", makeAssistantMessage());
 
-    expect(spies.updateChatAssistantActivity).not.toHaveBeenCalled();
+    expect(spies.upsertChatMessageScoped).toHaveBeenCalledTimes(1);
+    expect(spies.updateChatAssistantActivity).toHaveBeenCalledTimes(1);
   });
 
   test("does not throw on db error", async () => {

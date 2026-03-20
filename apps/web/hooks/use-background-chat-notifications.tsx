@@ -122,6 +122,24 @@ export function detectStoppedSessionsAwaitingPersistence(
   };
 }
 
+export function pruneExpiredPendingCompletionCandidates(
+  pendingCandidates: Map<string, PendingCompletionCandidate>,
+  now: number,
+  timeoutMs = COMPLETION_PERSISTENCE_TIMEOUT_MS,
+): Map<string, PendingCompletionCandidate> {
+  const nextPendingCandidates = new Map<string, PendingCompletionCandidate>();
+
+  for (const [sessionId, candidate] of pendingCandidates) {
+    if (now - candidate.waitingSinceMs >= timeoutMs) {
+      continue;
+    }
+
+    nextPendingCandidates.set(sessionId, candidate);
+  }
+
+  return nextPendingCandidates;
+}
+
 export function resolvePendingCompletionCandidates(
   pendingCandidates: Map<string, PendingCompletionCandidate>,
   currentItems: SessionNotificationItem[],
@@ -135,8 +153,13 @@ export function resolvePendingCompletionCandidates(
   const currentById = new Map(currentItems.map((item) => [item.id, item]));
   const completedIds: string[] = [];
   const nextPendingCandidates = new Map<string, PendingCompletionCandidate>();
+  const activePendingCandidates = pruneExpiredPendingCompletionCandidates(
+    pendingCandidates,
+    now,
+    timeoutMs,
+  );
 
-  for (const [sessionId, candidate] of pendingCandidates) {
+  for (const [sessionId, candidate] of activePendingCandidates) {
     const current = currentById.get(sessionId);
     if (!current || sessionId === activeId) {
       continue;
@@ -149,10 +172,6 @@ export function resolvePendingCompletionCandidates(
       )
     ) {
       completedIds.push(sessionId);
-      continue;
-    }
-
-    if (now - candidate.waitingSinceMs >= timeoutMs) {
       continue;
     }
 
@@ -264,14 +283,28 @@ export function useBackgroundChatNotifications(
       return;
     }
 
-    void refreshSessionsRef.current().catch(() => undefined);
+    const refreshPendingSessions = () => {
+      const nextPendingCandidates = pruneExpiredPendingCompletionCandidates(
+        pendingCandidatesRef.current,
+        Date.now(),
+      );
 
-    const interval = setInterval(() => {
-      if (pendingCandidatesRef.current.size === 0) {
+      if (nextPendingCandidates.size !== pendingCandidatesRef.current.size) {
+        pendingCandidatesRef.current = nextPendingCandidates;
+        setPendingCount(nextPendingCandidates.size);
+      }
+
+      if (nextPendingCandidates.size === 0) {
         return;
       }
 
       void refreshSessionsRef.current().catch(() => undefined);
+    };
+
+    refreshPendingSessions();
+
+    const interval = setInterval(() => {
+      refreshPendingSessions();
     }, COMPLETION_PERSISTENCE_POLL_MS);
 
     return () => clearInterval(interval);

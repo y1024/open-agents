@@ -3,6 +3,7 @@ import {
   COMPLETION_PERSISTENCE_TIMEOUT_MS,
   detectStoppedSessionsAwaitingPersistence,
   hasPersistedAssistantAdvanced,
+  pruneExpiredPendingCompletionCandidates,
   resolvePendingCompletionCandidates,
 } from "./use-background-chat-notifications";
 
@@ -123,6 +124,46 @@ describe("detectStoppedSessionsAwaitingPersistence", () => {
       completedIds: [],
       awaitingPersistence: [],
     });
+  });
+});
+
+describe("pruneExpiredPendingCompletionCandidates", () => {
+  test("keeps pending candidates before the timeout", () => {
+    const pendingCandidates = new Map([
+      [
+        "session-1",
+        {
+          baselineAssistantMessageAt: null,
+          waitingSinceMs: 1_000,
+        },
+      ],
+    ]);
+
+    const result = pruneExpiredPendingCompletionCandidates(
+      pendingCandidates,
+      1_000 + COMPLETION_PERSISTENCE_TIMEOUT_MS - 1,
+    );
+
+    expect(result).toEqual(pendingCandidates);
+  });
+
+  test("drops timed-out candidates without needing refreshed session data", () => {
+    const pendingCandidates = new Map([
+      [
+        "session-1",
+        {
+          baselineAssistantMessageAt: null,
+          waitingSinceMs: 1_000,
+        },
+      ],
+    ]);
+
+    const result = pruneExpiredPendingCompletionCandidates(
+      pendingCandidates,
+      1_000 + COMPLETION_PERSISTENCE_TIMEOUT_MS + 1,
+    );
+
+    expect(result.size).toBe(0);
   });
 });
 
