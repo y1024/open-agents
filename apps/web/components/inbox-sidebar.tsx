@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { CSSProperties } from "react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { InboxSidebarRenameDialog } from "@/components/inbox-sidebar-rename-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,10 @@ import { useSidebar } from "@/components/ui/sidebar";
 import { useSession } from "@/hooks/use-session";
 import type { SessionWithUnread } from "@/hooks/use-sessions";
 import type { Session as AuthSession } from "@/lib/session/types";
+import {
+  getSessionBucket,
+  type AttentionReason,
+} from "@/lib/sessions/get-session-bucket";
 
 type InboxSidebarProps = {
   sessions: SessionWithUnread[];
@@ -41,18 +45,6 @@ type InboxSidebarProps = {
   onOpenNewSession: () => void;
   initialUser?: AuthSession["user"];
 };
-
-type ArchivedSessionsResponse = {
-  sessions: SessionWithUnread[];
-  archivedCount: number;
-  pagination?: {
-    hasMore: boolean;
-    nextOffset: number;
-  };
-  error?: string;
-};
-
-const ARCHIVED_SESSIONS_PAGE_SIZE = 50;
 
 const sessionRowPerformanceStyle: CSSProperties = {
   contentVisibility: "auto",
@@ -128,6 +120,47 @@ function PrBadge({
   return <span className="text-[10px] text-muted-foreground">#{prNumber}</span>;
 }
 
+function AttentionReasonBadge({ reason }: { reason: AttentionReason }) {
+  switch (reason) {
+    case "failed":
+    case "lifecycle_failed":
+      return (
+        <span className="text-[10px] font-medium text-red-600 dark:text-red-400">
+          failed
+        </span>
+      );
+    case "unread":
+      return (
+        <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+          new activity
+        </span>
+      );
+    default:
+      return null;
+  }
+}
+
+function SectionLabel({
+  children,
+  count,
+}: {
+  children: React.ReactNode;
+  count?: number;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 px-2 pb-1 pt-2">
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+        {children}
+      </span>
+      {count !== undefined && count > 0 ? (
+        <span className="rounded-full bg-muted/70 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+          {count}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 type SessionRepoGroup = {
   id: string;
   label: string;
@@ -188,6 +221,7 @@ type SessionRowProps = {
   session: SessionWithUnread;
   isActive: boolean;
   isPending: boolean;
+  attentionReason?: AttentionReason;
   onSessionClick: (session: SessionWithUnread) => void;
   onSessionPrefetch: (session: SessionWithUnread) => void;
   onOpenRenameDialog: (session: SessionWithUnread) => void;
@@ -198,6 +232,7 @@ const SessionRow = memo(function SessionRow({
   session,
   isActive,
   isPending,
+  attentionReason,
   onSessionClick,
   onSessionPrefetch,
   onOpenRenameDialog,
@@ -218,6 +253,7 @@ const SessionRow = memo(function SessionRow({
     : "truncate";
   const showMetadata =
     Boolean(metadataLabel) ||
+    Boolean(attentionReason) ||
     session.prNumber !== null ||
     session.linesAdded !== null ||
     session.linesRemoved !== null;
@@ -266,7 +302,9 @@ const SessionRow = memo(function SessionRow({
 
           {showMetadata ? (
             <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-              {metadataLabel ? (
+              {attentionReason ? (
+                <AttentionReasonBadge reason={attentionReason} />
+              ) : metadataLabel ? (
                 <span className={metadataLabelClassName}>{metadataLabel}</span>
               ) : null}
               <span className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -326,11 +364,17 @@ function areSessionRowsEqual(
     return false;
   }
 
+  if (prev.attentionReason !== next.attentionReason) {
+    return false;
+  }
+
   return (
     prev.session.id === next.session.id &&
     prev.session.title === next.session.title &&
     prev.session.hasStreaming === next.session.hasStreaming &&
     prev.session.hasUnread === next.session.hasUnread &&
+    prev.session.status === next.session.status &&
+    prev.session.lifecycleState === next.session.lifecycleState &&
     prev.session.repoOwner === next.session.repoOwner &&
     prev.session.repoName === next.session.repoName &&
     prev.session.branch === next.session.branch &&
@@ -344,7 +388,7 @@ function areSessionRowsEqual(
 
 export function InboxSidebar({
   sessions,
-  archivedCount,
+  archivedCount: _archivedCount,
   sessionsLoading,
   activeSessionId,
   pendingSessionId,
@@ -358,108 +402,54 @@ export function InboxSidebar({
   const router = useRouter();
   const { session } = useSession();
   const { isMobile, setOpenMobile } = useSidebar();
-  const [showArchived, setShowArchived] = useState(false);
-  const [archivedSessions, setArchivedSessions] = useState<SessionWithUnread[]>(
-    [],
-  );
-  const [archivedSessionsLoading, setArchivedSessionsLoading] = useState(false);
-  const [archivedSessionsError, setArchivedSessionsError] = useState<
-    string | null
-  >(null);
-  const [hasMoreArchivedSessions, setHasMoreArchivedSessions] = useState(false);
-  const archivedRequestInFlightRef = useRef(false);
-  const lastLoadedArchivedCountRef = useRef(0);
+  const [cookingExpanded, setCookingExpanded] = useState(false);
   const [renameDialogSession, setRenameDialogSession] =
     useState<SessionWithUnread | null>(null);
 
-  const fetchArchivedSessionsPage = useCallback(
-    async ({ offset, replace }: { offset: number; replace: boolean }) => {
-      if (archivedRequestInFlightRef.current) {
-        return;
-      }
+  // Classify all sessions into buckets
+  const { attentionSessions, cookingSessions, idleSessions, attentionReasons } =
+    useMemo(() => {
+      const attention: SessionWithUnread[] = [];
+      const cooking: SessionWithUnread[] = [];
+      const idle: SessionWithUnread[] = [];
+      const reasons = new Map<string, AttentionReason>();
 
-      archivedRequestInFlightRef.current = true;
-      setArchivedSessionsLoading(true);
-      setArchivedSessionsError(null);
-
-      try {
-        const query = new URLSearchParams({
-          status: "archived",
-          limit: String(ARCHIVED_SESSIONS_PAGE_SIZE),
-          offset: String(offset),
-        });
-        const res = await fetch(`/api/sessions?${query.toString()}`);
-        const data = (await res.json()) as ArchivedSessionsResponse;
-
-        if (!res.ok) {
-          throw new Error(data.error ?? "Failed to load archived sessions");
-        }
-
-        setArchivedSessions((current) => {
-          if (replace) {
-            return data.sessions;
+      for (const s of sessions) {
+        const result = getSessionBucket(s);
+        if (result.bucket === "attention") {
+          attention.push(s);
+          if (result.reason) {
+            reasons.set(s.id, result.reason);
           }
-
-          const existingIds = new Set(current.map((session) => session.id));
-          const nextSessions = data.sessions.filter(
-            (session) => !existingIds.has(session.id),
-          );
-
-          return [...current, ...nextSessions];
-        });
-        lastLoadedArchivedCountRef.current = data.archivedCount;
-        setHasMoreArchivedSessions(Boolean(data.pagination?.hasMore));
-      } catch (error) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : "Failed to load archived sessions";
-        setArchivedSessionsError(message);
-      } finally {
-        archivedRequestInFlightRef.current = false;
-        setArchivedSessionsLoading(false);
+        } else if (result.bucket === "cooking") {
+          cooking.push(s);
+        } else if (result.bucket === "idle") {
+          idle.push(s);
+        }
+        // "done" sessions are filtered out by the API (status=active excludes archived)
       }
-    },
-    [],
+
+      return {
+        attentionSessions: attention,
+        cookingSessions: cooking,
+        idleSessions: idle,
+        attentionReasons: reasons,
+      };
+    }, [sessions]);
+
+  const idleGroupedByRepo = useMemo(
+    () => groupSessionsByRepo(idleSessions),
+    [idleSessions],
   );
 
-  useEffect(() => {
-    if (!showArchived) {
-      return;
-    }
-
-    if (archivedCount === 0) {
-      setArchivedSessions([]);
-      setHasMoreArchivedSessions(false);
-      setArchivedSessionsError(null);
-      lastLoadedArchivedCountRef.current = 0;
-      return;
-    }
-
-    if (lastLoadedArchivedCountRef.current === archivedCount) {
-      return;
-    }
-
-    void fetchArchivedSessionsPage({ offset: 0, replace: true });
-  }, [archivedCount, fetchArchivedSessionsPage, showArchived]);
-
-  const activeSessions = sessions;
-  const displayedSessions = showArchived ? archivedSessions : activeSessions;
-  const showLoadingSkeleton =
-    (!showArchived && sessionsLoading && sessions.length === 0) ||
-    (showArchived && archivedSessionsLoading && archivedSessions.length === 0);
-  const sidebarUser = session?.user ?? initialUser;
-  const groupedSessions = useMemo(
-    () => groupSessionsByRepo(displayedSessions),
-    [displayedSessions],
-  );
-  const activeGroupId = useMemo(
+  const idleActiveGroupId = useMemo(
     () =>
-      groupedSessions.find((group) =>
-        group.sessions.some((session) => session.id === activeSessionId),
+      idleGroupedByRepo.find((group) =>
+        group.sessions.some((s) => s.id === activeSessionId),
       )?.id ?? null,
-    [activeSessionId, groupedSessions],
+    [activeSessionId, idleGroupedByRepo],
   );
+
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<
     Record<string, boolean>
   >({});
@@ -469,9 +459,9 @@ export function InboxSidebar({
       const next: Record<string, boolean> = {};
       let changed = false;
 
-      for (const group of groupedSessions) {
+      for (const group of idleGroupedByRepo) {
         const nextCollapsed =
-          group.id === activeGroupId ? false : (current[group.id] ?? false);
+          group.id === idleActiveGroupId ? false : (current[group.id] ?? false);
 
         next[group.id] = nextCollapsed;
 
@@ -482,28 +472,31 @@ export function InboxSidebar({
 
       if (!changed) {
         const currentIds = Object.keys(current);
-        if (currentIds.length !== groupedSessions.length) {
+        if (currentIds.length !== idleGroupedByRepo.length) {
           changed = true;
         }
       }
 
       return changed ? next : current;
     });
-  }, [activeGroupId, groupedSessions]);
+  }, [idleActiveGroupId, idleGroupedByRepo]);
+
+  const sidebarUser = session?.user ?? initialUser;
+  const showLoadingSkeleton = sessionsLoading && sessions.length === 0;
 
   const handleSessionClick = useCallback(
-    (session: SessionWithUnread) => {
+    (s: SessionWithUnread) => {
       if (isMobile) {
         setOpenMobile(false);
       }
-      onSessionClick(session);
+      onSessionClick(s);
     },
     [isMobile, onSessionClick, setOpenMobile],
   );
 
   const handleSessionPrefetch = useCallback(
-    (session: SessionWithUnread) => {
-      onSessionPrefetch(session);
+    (s: SessionWithUnread) => {
+      onSessionPrefetch(s);
     },
     [onSessionPrefetch],
   );
@@ -516,76 +509,28 @@ export function InboxSidebar({
   }, []);
 
   const handleArchiveSession = useCallback(
-    async (session: SessionWithUnread) => {
+    async (s: SessionWithUnread) => {
       try {
-        await onArchiveSession(session.id);
-        setArchivedSessions((current) => {
-          const nextSessions = [
-            { ...session, status: "archived" as const },
-            ...current.filter(
-              (existingSession) => existingSession.id !== session.id,
-            ),
-          ];
-          const maxCachedSessions = Math.max(
-            current.length,
-            ARCHIVED_SESSIONS_PAGE_SIZE,
-          );
-
-          return nextSessions.slice(0, maxCachedSessions);
-        });
-        setHasMoreArchivedSessions(
-          (currentHasMore) =>
-            currentHasMore || archivedCount + 1 > ARCHIVED_SESSIONS_PAGE_SIZE,
-        );
+        await onArchiveSession(s.id);
       } catch (err) {
         console.error("Failed to archive session:", err);
       }
     },
-    [archivedCount, onArchiveSession],
+    [onArchiveSession],
   );
-
-  const handleLoadMoreArchivedSessions = useCallback(() => {
-    if (archivedSessionsLoading) {
-      return;
-    }
-
-    void fetchArchivedSessionsPage({
-      offset: archivedSessions.length,
-      replace: false,
-    });
-  }, [
-    archivedSessions.length,
-    archivedSessionsLoading,
-    fetchArchivedSessionsPage,
-  ]);
-
-  const handleRetryArchivedSessions = useCallback(() => {
-    void fetchArchivedSessionsPage({ offset: 0, replace: true });
-  }, [fetchArchivedSessionsPage]);
 
   const closeRenameDialog = useCallback(() => {
     setRenameDialogSession(null);
   }, []);
 
-  const handleOpenRenameDialog = useCallback((session: SessionWithUnread) => {
-    setRenameDialogSession(session);
+  const handleOpenRenameDialog = useCallback((s: SessionWithUnread) => {
+    setRenameDialogSession(s);
   }, []);
-
-  const handleRenameArchivedSession = useCallback(
-    (sessionId: string, title: string) => {
-      setArchivedSessions((current) =>
-        current.map((session) =>
-          session.id === sessionId ? { ...session, title } : session,
-        ),
-      );
-    },
-    [],
-  );
 
   return (
     <>
       <div className="border-b border-border p-3">
-        <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center justify-between">
           <div className="flex items-center px-2 py-1.5 text-sm text-primary">
             <span>Sessions</span>
           </div>
@@ -599,42 +544,6 @@ export function InboxSidebar({
             <Plus className="h-4 w-4" />
           </Button>
         </div>
-
-        <div className="flex gap-1">
-          <button
-            type="button"
-            onClick={() => setShowArchived(false)}
-            className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-              !showArchived
-                ? "bg-muted text-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Active
-            {activeSessions.length > 0 && (
-              <span className="ml-1.5 text-muted-foreground">
-                {activeSessions.length}
-              </span>
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowArchived(true)}
-            className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-              showArchived
-                ? "bg-muted text-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <Archive className="h-3 w-3" />
-            Archive
-            {archivedCount > 0 && (
-              <span className="ml-1 text-muted-foreground">
-                {archivedCount}
-              </span>
-            )}
-          </button>
-        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -647,133 +556,169 @@ export function InboxSidebar({
               </div>
             ))}
           </div>
-        ) : displayedSessions.length === 0 ? (
+        ) : sessions.length === 0 ? (
           <div className="px-4 py-12 text-center text-sm text-muted-foreground">
-            {showArchived
-              ? (archivedSessionsError ?? "No archived sessions")
-              : "No sessions yet"}
-            {showArchived && archivedSessionsError ? (
-              <div className="mt-3">
-                <Button
+            No sessions yet
+          </div>
+        ) : (
+          <div className="p-1.5">
+            {/* Attention section */}
+            {attentionSessions.length > 0 ? (
+              <div>
+                <SectionLabel count={attentionSessions.length}>
+                  Needs attention
+                </SectionLabel>
+                <div className="space-y-1">
+                  {attentionSessions.map((s) => (
+                    <SessionRow
+                      key={s.id}
+                      session={s}
+                      isActive={s.id === activeSessionId}
+                      isPending={s.id === pendingSessionId}
+                      attentionReason={attentionReasons.get(s.id)}
+                      onSessionClick={handleSessionClick}
+                      onSessionPrefetch={handleSessionPrefetch}
+                      onOpenRenameDialog={handleOpenRenameDialog}
+                      onArchiveSession={handleArchiveSession}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {/* Idle sessions — grouped by repo */}
+            {idleGroupedByRepo.length > 0 ? (
+              <div className={attentionSessions.length > 0 ? "mt-2" : ""}>
+                <SectionLabel count={idleSessions.length}>
+                  Sessions
+                </SectionLabel>
+                <div className="space-y-3">
+                  {idleGroupedByRepo.map((group) => {
+                    const isCollapsed = collapsedGroupIds[group.id] ?? false;
+                    const groupHasActiveSession =
+                      group.id === idleActiveGroupId;
+                    const groupContentId = getRepoGroupContentId(group.id);
+
+                    return (
+                      <section key={group.id} className="space-y-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleRepoGroup(group.id)}
+                          aria-controls={groupContentId}
+                          aria-expanded={!isCollapsed}
+                          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
+                            groupHasActiveSession
+                              ? "bg-muted/35 text-foreground"
+                              : "text-muted-foreground hover:bg-muted/20 hover:text-foreground/85"
+                          }`}
+                        >
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border/40 bg-background/70 text-muted-foreground/80">
+                            <FolderGit2 className="h-3.5 w-3.5" />
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
+                            {group.label}
+                          </span>
+                          <span
+                            className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                              groupHasActiveSession
+                                ? "bg-background/80 text-foreground/65"
+                                : "bg-muted/70 text-muted-foreground"
+                            }`}
+                          >
+                            {group.sessions.length}
+                          </span>
+                          <ChevronDown
+                            className={`h-3.5 w-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-200 ${
+                              isCollapsed ? "-rotate-90" : "rotate-0"
+                            }`}
+                          />
+                        </button>
+                        <div
+                          id={groupContentId}
+                          aria-hidden={isCollapsed}
+                          inert={isCollapsed}
+                          className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none ${
+                            isCollapsed
+                              ? "grid-rows-[0fr] opacity-0 pointer-events-none"
+                              : "grid-rows-[1fr] opacity-100"
+                          }`}
+                        >
+                          <div className="overflow-hidden">
+                            <div className="ml-5 space-y-1 border-l border-border/40 pl-2">
+                              {group.sessions.map((s) => (
+                                <SessionRow
+                                  key={s.id}
+                                  session={s}
+                                  isActive={s.id === activeSessionId}
+                                  isPending={s.id === pendingSessionId}
+                                  onSessionClick={handleSessionClick}
+                                  onSessionPrefetch={handleSessionPrefetch}
+                                  onOpenRenameDialog={handleOpenRenameDialog}
+                                  onArchiveSession={handleArchiveSession}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </section>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+
+            {/* Cooking section — streaming sessions, collapsed */}
+            {cookingSessions.length > 0 ? (
+              <div
+                className={`${attentionSessions.length > 0 || idleGroupedByRepo.length > 0 ? "mt-2" : ""}`}
+              >
+                <button
                   type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleRetryArchivedSessions}
+                  onClick={() => setCookingExpanded((v) => !v)}
+                  className="flex w-full items-center gap-1.5 px-2 pb-1 pt-2 text-left"
                 >
-                  Retry
-                </Button>
+                  <ChevronDown
+                    className={`h-3 w-3 shrink-0 text-muted-foreground/70 transition-transform duration-200 ${
+                      cookingExpanded ? "rotate-0" : "-rotate-90"
+                    }`}
+                  />
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                    Cooking
+                  </span>
+                  <span className="rounded-full bg-muted/70 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    {cookingSessions.length}
+                  </span>
+                </button>
+
+                <div
+                  className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none ${
+                    cookingExpanded
+                      ? "grid-rows-[1fr] opacity-100"
+                      : "grid-rows-[0fr] opacity-0 pointer-events-none"
+                  }`}
+                  aria-hidden={!cookingExpanded}
+                  inert={!cookingExpanded}
+                >
+                  <div className="overflow-hidden">
+                    <div className="space-y-1">
+                      {cookingSessions.map((s) => (
+                        <SessionRow
+                          key={s.id}
+                          session={s}
+                          isActive={s.id === activeSessionId}
+                          isPending={s.id === pendingSessionId}
+                          onSessionClick={handleSessionClick}
+                          onSessionPrefetch={handleSessionPrefetch}
+                          onOpenRenameDialog={handleOpenRenameDialog}
+                          onArchiveSession={handleArchiveSession}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : null}
           </div>
-        ) : (
-          <>
-            <div className="space-y-3 p-1.5">
-              {groupedSessions.map((group) => {
-                const isCollapsed = collapsedGroupIds[group.id] ?? false;
-                const groupHasActiveSession = group.id === activeGroupId;
-                const groupHasUnread = group.sessions.some(
-                  (session) =>
-                    session.hasUnread && session.id !== activeSessionId,
-                );
-                const groupHasStreaming = group.sessions.some(
-                  (session) => session.hasStreaming,
-                );
-                const groupContentId = getRepoGroupContentId(group.id);
-
-                return (
-                  <section key={group.id} className="space-y-1.5">
-                    <button
-                      type="button"
-                      onClick={() => handleToggleRepoGroup(group.id)}
-                      aria-controls={groupContentId}
-                      aria-expanded={!isCollapsed}
-                      className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
-                        groupHasActiveSession
-                          ? "bg-muted/35 text-foreground"
-                          : "text-muted-foreground hover:bg-muted/20 hover:text-foreground/85"
-                      }`}
-                    >
-                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border/40 bg-background/70 text-muted-foreground/80">
-                        <FolderGit2 className="h-3.5 w-3.5" />
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
-                        {group.label}
-                      </span>
-                      {groupHasStreaming ? (
-                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500 animate-pulse" />
-                      ) : groupHasUnread ? (
-                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500" />
-                      ) : null}
-                      <span
-                        className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
-                          groupHasActiveSession
-                            ? "bg-background/80 text-foreground/65"
-                            : "bg-muted/70 text-muted-foreground"
-                        }`}
-                      >
-                        {group.sessions.length}
-                      </span>
-                      <ChevronDown
-                        className={`h-3.5 w-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-200 ${
-                          isCollapsed ? "-rotate-90" : "rotate-0"
-                        }`}
-                      />
-                    </button>
-                    <div
-                      id={groupContentId}
-                      aria-hidden={isCollapsed}
-                      inert={isCollapsed}
-                      className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none ${
-                        isCollapsed
-                          ? "grid-rows-[0fr] opacity-0 pointer-events-none"
-                          : "grid-rows-[1fr] opacity-100"
-                      }`}
-                    >
-                      <div className="overflow-hidden">
-                        <div className="ml-5 space-y-1 border-l border-border/40 pl-2">
-                          {group.sessions.map((session) => (
-                            <SessionRow
-                              key={session.id}
-                              session={session}
-                              isActive={session.id === activeSessionId}
-                              isPending={session.id === pendingSessionId}
-                              onSessionClick={handleSessionClick}
-                              onSessionPrefetch={handleSessionPrefetch}
-                              onOpenRenameDialog={handleOpenRenameDialog}
-                              onArchiveSession={handleArchiveSession}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </section>
-                );
-              })}
-            </div>
-            {showArchived &&
-            (hasMoreArchivedSessions || archivedSessionsError) ? (
-              <div className="px-3 pb-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="w-full"
-                  onClick={
-                    archivedSessionsError
-                      ? handleRetryArchivedSessions
-                      : handleLoadMoreArchivedSessions
-                  }
-                  disabled={archivedSessionsLoading}
-                >
-                  {archivedSessionsLoading
-                    ? "Loading..."
-                    : archivedSessionsError
-                      ? "Retry loading archived sessions"
-                      : "Load more archived sessions"}
-                </Button>
-              </div>
-            ) : null}
-          </>
         )}
       </div>
 
@@ -819,7 +764,6 @@ export function InboxSidebar({
         session={renameDialogSession}
         onClose={closeRenameDialog}
         onRenameSession={onRenameSession}
-        onRenamed={handleRenameArchivedSession}
       />
     </>
   );

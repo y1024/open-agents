@@ -11,6 +11,7 @@ export type SessionWithUnread = Pick<
   | "id"
   | "title"
   | "status"
+  | "lifecycleState"
   | "repoOwner"
   | "repoName"
   | "branch"
@@ -69,6 +70,7 @@ function mergeSessionWithSummary(
     id: updatedSession.id,
     title: updatedSession.title,
     status: updatedSession.status,
+    lifecycleState: updatedSession.lifecycleState,
     repoOwner: updatedSession.repoOwner,
     repoName: updatedSession.repoName,
     branch: updatedSession.branch,
@@ -109,7 +111,10 @@ export function useSessions(options?: {
         );
         // Poll quickly while any session is streaming so we detect
         // completion promptly for background-chat notifications.
-        return hasStreamingSession ? 3_000 : 0;
+        // Use a 30s baseline so the sidebar picks up server-side state
+        // changes (e.g. webhook-driven archives, lifecycle failures)
+        // even when nothing is streaming.
+        return hasStreamingSession ? 3_000 : 30_000;
       },
     },
   );
