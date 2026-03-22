@@ -3,6 +3,9 @@
 import {
   Archive,
   EllipsisVertical,
+  ExternalLink,
+  GitMerge,
+  GitPullRequest,
   Loader2,
   Pencil,
   Plus,
@@ -18,6 +21,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useSession } from "@/hooks/use-session";
@@ -124,11 +128,8 @@ function sortSessionsForInbox(
   });
 }
 
-/**
- * Second-line metadata: repo · branch · PR status.
- * Joins only what exists, returns null if empty.
- */
-function getMetaLine(session: SessionWithUnread): string | null {
+/** Repo · branch text for the metadata line (excludes PR — that's a badge). */
+function getRepoMeta(session: SessionWithUnread): string | null {
   const parts: string[] = [];
 
   if (session.repoOwner && session.repoName) {
@@ -141,12 +142,41 @@ function getMetaLine(session: SessionWithUnread): string | null {
     parts.push(session.branch);
   }
 
-  if (session.prNumber) {
-    const prefix = session.prStatus === "merged" ? "Merged" : "PR";
-    parts.push(`${prefix} #${session.prNumber}`);
-  }
-
   return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function getGitHubPrUrl(session: SessionWithUnread): string | null {
+  if (!session.prNumber || !session.repoOwner || !session.repoName) return null;
+  return `https://github.com/${session.repoOwner}/${session.repoName}/pull/${session.prNumber}`;
+}
+
+function getGitHubRepoUrl(session: SessionWithUnread): string | null {
+  if (!session.repoOwner || !session.repoName) return null;
+  return `https://github.com/${session.repoOwner}/${session.repoName}`;
+}
+
+function PrBadge({ session }: { session: SessionWithUnread }) {
+  if (!session.prNumber) return null;
+
+  const isMerged = session.prStatus === "merged";
+
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-px text-[10px] font-medium",
+        isMerged
+          ? "border-purple-500/20 bg-purple-500/10 text-purple-700 dark:text-purple-400"
+          : "border-green-500/20 bg-green-500/10 text-green-700 dark:text-green-400",
+      )}
+    >
+      {isMerged ? (
+        <GitMerge className="h-2.5 w-2.5" />
+      ) : (
+        <GitPullRequest className="h-2.5 w-2.5" />
+      )}
+      #{session.prNumber}
+    </span>
+  );
 }
 
 function DiffStats({
@@ -199,7 +229,14 @@ const SessionRow = memo(function SessionRow({
       formatRelativeTime(new Date(session.lastActivityAt ?? session.createdAt)),
     [session.createdAt, session.lastActivityAt],
   );
-  const meta = getMetaLine(session);
+  const repoMeta = getRepoMeta(session);
+  const hasSecondLine =
+    Boolean(repoMeta) ||
+    Boolean(session.prNumber) ||
+    session.linesAdded !== null ||
+    session.linesRemoved !== null;
+  const prUrl = getGitHubPrUrl(session);
+  const repoUrl = getGitHubRepoUrl(session);
 
   return (
     <div
@@ -253,10 +290,13 @@ const SessionRow = memo(function SessionRow({
             </span>
           </div>
 
-          {/* Line 2: repo · branch · PR + diff stats */}
-          {meta ? (
-            <div className="mt-0.5 flex items-baseline gap-1.5 text-xs text-muted-foreground">
-              <span className="min-w-0 truncate font-mono">{meta}</span>
+          {/* Line 2: repo · branch + PR badge + diff stats */}
+          {hasSecondLine ? (
+            <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+              {repoMeta ? (
+                <span className="min-w-0 truncate font-mono">{repoMeta}</span>
+              ) : null}
+              <PrBadge session={session} />
               <DiffStats
                 added={session.linesAdded}
                 removed={session.linesRemoved}
@@ -278,13 +318,20 @@ const SessionRow = memo(function SessionRow({
             <EllipsisVertical className="h-3.5 w-3.5" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
+        <DropdownMenuContent align="end" className="w-48">
+          <DropdownMenuItem
+            onClick={() => onSessionClick(session)}
+            className="gap-2"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            <span>Open session</span>
+          </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() => onOpenRenameDialog(session)}
             className="gap-2"
           >
             <Pencil className="h-3.5 w-3.5" />
-            <span>Rename session</span>
+            <span>Rename</span>
           </DropdownMenuItem>
           {session.status !== "archived" ? (
             <DropdownMenuItem
@@ -292,7 +339,37 @@ const SessionRow = memo(function SessionRow({
               className="gap-2"
             >
               <Archive className="h-3.5 w-3.5" />
-              <span>Archive session</span>
+              <span>Archive</span>
+            </DropdownMenuItem>
+          ) : null}
+          {prUrl || repoUrl ? <DropdownMenuSeparator /> : null}
+          {prUrl ? (
+            <DropdownMenuItem
+              onClick={() =>
+                window.open(prUrl, "_blank", "noopener,noreferrer")
+              }
+              className="gap-2"
+            >
+              {session.prStatus === "merged" ? (
+                <GitMerge className="h-3.5 w-3.5" />
+              ) : (
+                <GitPullRequest className="h-3.5 w-3.5" />
+              )}
+              <span>
+                {session.prStatus === "merged" ? "View merged PR" : "View PR"} #
+                {session.prNumber}
+              </span>
+            </DropdownMenuItem>
+          ) : null}
+          {repoUrl ? (
+            <DropdownMenuItem
+              onClick={() =>
+                window.open(repoUrl, "_blank", "noopener,noreferrer")
+              }
+              className="gap-2"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              <span>View on GitHub</span>
             </DropdownMenuItem>
           ) : null}
         </DropdownMenuContent>
