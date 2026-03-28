@@ -2,7 +2,9 @@ import type { LanguageModel } from "ai";
 import { gateway, stepCountIs, ToolLoopAgent } from "ai";
 import { z } from "zod";
 import { bashTool } from "../tools/bash";
+import { skillTool } from "../tools/skill";
 import { synthesizeVoiceoverTool, uploadBlobTool } from "./screencast-tools";
+import type { SkillMetadata } from "../skills/types";
 import type { SandboxExecutionContext } from "../types";
 
 const SCREENCAST_SYSTEM_PROMPT = `You are a screencast agent that records narrated browser demos and returns a shareable URL.
@@ -29,6 +31,17 @@ Narration guidelines:
 - Point out what's interesting: "Notice the toast notification"
 - Keep each cue to 1-2 sentences
 - Don't mention selectors, refs, coordinates, or wait times
+
+## FIRST: Load browser automation skill
+
+Before doing anything else, invoke the agent-browser skill to load the full command reference:
+
+\`\`\`
+skill({ skill: "agent-browser" })
+\`\`\`
+
+This gives you the exact command syntax for all browser automation. Use ONLY commands from the skill output.
+Do NOT guess or invent commands (e.g., never use "open-url" — the correct command is "open").
 
 ## Step 2: Recording
 
@@ -131,6 +144,10 @@ const callOptionsSchema = z.object({
     .custom<SandboxExecutionContext["sandbox"]>()
     .describe("Sandbox for file system and shell operations"),
   model: z.custom<LanguageModel>().describe("Language model for this subagent"),
+  skills: z
+    .custom<SkillMetadata[]>()
+    .optional()
+    .describe("Available skills from the parent agent"),
 });
 
 export type ScreencastCallOptions = z.infer<typeof callOptionsSchema>;
@@ -140,6 +157,7 @@ export const screencastSubagent = new ToolLoopAgent({
   instructions: SCREENCAST_SYSTEM_PROMPT,
   tools: {
     bash: bashTool(),
+    skill: skillTool,
     synthesize_voiceover: synthesizeVoiceoverTool(),
     upload_blob: uploadBlobTool(),
   },
@@ -152,6 +170,7 @@ export const screencastSubagent = new ToolLoopAgent({
 
     const sandbox = options.sandbox;
     const model = options.model ?? settings.model;
+    const skills = options.skills;
     return {
       ...settings,
       model,
@@ -169,10 +188,12 @@ ${options.instructions}
 ## REMINDER
 - You CANNOT ask questions — no one will respond
 - Complete the full recording pipeline before returning
+- Your FIRST action MUST be to invoke the agent-browser skill to learn the exact command syntax
 - Your final message MUST include the **Summary** and **Answer** with PR-embeddable markdown`,
       experimental_context: {
         sandbox,
         model,
+        skills,
       },
     };
   },

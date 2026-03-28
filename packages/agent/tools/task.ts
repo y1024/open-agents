@@ -119,6 +119,12 @@ NOTE: All subagents run within the sandbox. Use explorer for read-only research,
     const model = getSubagentModel(experimental_context, "task");
     const subagentModelId = typeof model === "string" ? model : model.modelId;
 
+    // Extract skills from parent context for subagents that need them
+    const parentContext = experimental_context as
+      | { skills?: import("../skills/types").SkillMetadata[] }
+      | undefined;
+    const skills = parentContext?.skills;
+
     const subagent =
       subagentType === "explorer"
         ? explorerSubagent
@@ -134,6 +140,7 @@ NOTE: All subagents run within the sandbox. Use explorer for read-only research,
         instructions,
         sandbox: sandboxContext.sandbox,
         model,
+        ...(skills && { skills }),
       },
       abortSignal,
     });
