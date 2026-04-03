@@ -195,19 +195,19 @@ function SessionPopoverContent({ session }: { session: SessionWithUnread }) {
         {session.title}
       </p>
 
-      {/* Status · branch · time — all inline */}
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        {getSessionStatusIcon(session)}
-        <span>{getSessionStatusLabel(session)}</span>
+      {/* Status · branch · time — all inline, never wraps */}
+      <div className="flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs text-muted-foreground">
+        <span className="shrink-0">{getSessionStatusIcon(session)}</span>
+        <span className="shrink-0">{getSessionStatusLabel(session)}</span>
         {session.branch ? (
           <>
-            <span className="text-muted-foreground/40">·</span>
-            <span className="truncate font-mono text-[11px]">
+            <span className="shrink-0 text-muted-foreground/40">·</span>
+            <span className="min-w-0 truncate font-mono text-[11px]">
               {session.branch}
             </span>
           </>
         ) : null}
-        <span className="text-muted-foreground/40">·</span>
+        <span className="shrink-0 text-muted-foreground/40">·</span>
         <span className="shrink-0">{lastActivityLabel}</span>
       </div>
 
@@ -383,8 +383,8 @@ const SessionRow = memo(function SessionRow({
             </p>
           </span>
 
-          {/* Right side: diff stats or archive button on hover */}
-          <span className="flex shrink-0 items-center">
+          {/* Right side: fixed width so title truncation is consistent */}
+          <span className="flex w-10 shrink-0 items-center justify-end">
             {showArchiveButton ? (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -416,7 +416,7 @@ const SessionRow = memo(function SessionRow({
       <PopoverContent
         side="right"
         align="start"
-        sideOffset={8}
+        sideOffset={12}
         className="w-72 p-3"
         onMouseEnter={() => {
           if (leaveTimeoutRef.current) {
