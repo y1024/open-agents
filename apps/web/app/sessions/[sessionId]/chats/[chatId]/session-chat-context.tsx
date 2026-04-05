@@ -74,6 +74,22 @@ function toMs(value: Date | null | undefined): number | null {
   return value ? value.getTime() : null;
 }
 
+function preserveSandboxIdentity(
+  sandboxState: SandboxState | null | undefined,
+): SandboxState | null {
+  if (!sandboxState) return null;
+
+  if (
+    "name" in sandboxState &&
+    typeof sandboxState.name === "string" &&
+    sandboxState.name.length > 0
+  ) {
+    return { type: sandboxState.type, name: sandboxState.name } as SandboxState;
+  }
+
+  return { type: sandboxState.type } as SandboxState;
+}
+
 function toPositiveInteger(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return null;
@@ -350,9 +366,7 @@ export function SessionChatProvider({
     // Preserve the sandbox type for restoration, but clear other state
     setSessionRecord((prev) => ({
       ...prev,
-      sandboxState: prev.sandboxState
-        ? ({ type: prev.sandboxState.type } as SandboxState)
-        : null,
+      sandboxState: preserveSandboxIdentity(prev.sandboxState),
     }));
   }, [sessionId]);
 
@@ -476,9 +490,7 @@ export function SessionChatProvider({
           // Preserve the sandbox type for restoration, but clear other state
           setSessionRecord((prev) => ({
             ...prev,
-            sandboxState: prev.sandboxState
-              ? ({ type: prev.sandboxState.type } as SandboxState)
-              : null,
+            sandboxState: preserveSandboxIdentity(prev.sandboxState),
           }));
           setReconnectionStatus("no_sandbox");
           return "no_sandbox";
@@ -489,9 +501,7 @@ export function SessionChatProvider({
         // Preserve the sandbox type for restoration, but clear other state
         setSessionRecord((prev) => ({
           ...prev,
-          sandboxState: prev.sandboxState
-            ? ({ type: prev.sandboxState.type } as SandboxState)
-            : null,
+          sandboxState: preserveSandboxIdentity(prev.sandboxState),
         }));
         setReconnectionStatus("failed");
         return "failed";
@@ -541,9 +551,7 @@ export function SessionChatProvider({
             sandboxInfoCache.delete(sessionId);
             setSessionRecord((prev) => ({
               ...prev,
-              sandboxState: prev.sandboxState
-                ? ({ type: prev.sandboxState.type } as SandboxState)
-                : null,
+              sandboxState: preserveSandboxIdentity(prev.sandboxState),
             }));
             setReconnectionStatus((prev) =>
               prev === "checking" ? prev : "no_sandbox",
