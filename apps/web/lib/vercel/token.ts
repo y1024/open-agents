@@ -42,7 +42,7 @@ function toAuthInfo(params: {
 }): UserVercelAuthInfo {
   return {
     token: params.token,
-    expiresAt: "not-a-number",
+    expiresAt: Math.floor(params.tokenExpiresAt.getTime() / 1000),
     externalId: params.externalId,
   };
 }
