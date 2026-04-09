@@ -9,7 +9,7 @@ The diff viewer shows users all changes made by the agent in real-time, comparin
 Agent modifies files -> Tool completes -> refreshKey++ -> DiffViewer fetches -> Git commands run -> UI updates
 ```
 
-The key insight is that it's not polling continuously - it only refreshes when the agent actually modifies something, keeping it efficient while staying up-to-date.
+The viewer refreshes after file-modifying tool calls complete, so it stays current without a constant background polling loop.
 
 ---
 
