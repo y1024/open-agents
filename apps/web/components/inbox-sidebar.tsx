@@ -123,6 +123,13 @@ function DiffStats({
   );
 }
 
+function isSessionSettingUp(session: SessionWithUnread): boolean {
+  return (
+    session.lifecycleState === "provisioning" ||
+    session.lifecycleState === "restoring"
+  );
+}
+
 function getSessionStatusIcon(session: SessionWithUnread) {
   // Actively streaming / waiting for LLM
   if (session.hasStreaming) {
@@ -152,17 +159,16 @@ function getSessionStatusIcon(session: SessionWithUnread) {
     return <GitBranch className="h-3.5 w-3.5 shrink-0 text-amber-500" />;
   }
 
+  if (isSessionSettingUp(session)) {
+    return (
+      <Monitor className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+    );
+  }
+
   // Has a branch but no changes yet → new session, still getting started
   if (session.branch) {
     return (
       <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
-    );
-  }
-
-  // Creating / instantiating sandbox (no branch yet)
-  if (session.status === "running") {
-    return (
-      <Monitor className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
     );
   }
 
@@ -184,12 +190,13 @@ function getSessionStatusLabel(session: SessionWithUnread): {
   const hasDiff = session.linesAdded || session.linesRemoved;
   if (session.branch && hasDiff)
     return { text: "Needs attention", prNumber: null };
-  if (session.branch) return { text: "New session", prNumber: null };
-  if (session.status === "running")
+  if (isSessionSettingUp(session))
     return { text: "Setting up", prNumber: null };
+  if (session.branch) return { text: "New session", prNumber: null };
+  if (session.lifecycleState === "failed" || session.status === "failed")
+    return { text: "Failed", prNumber: null };
   if (session.status === "completed")
     return { text: "Completed", prNumber: null };
-  if (session.status === "failed") return { text: "Failed", prNumber: null };
   if (session.status === "archived")
     return { text: "Archived", prNumber: null };
   return { text: "Idle", prNumber: null };

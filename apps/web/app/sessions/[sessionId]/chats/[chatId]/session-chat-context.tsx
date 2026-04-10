@@ -430,8 +430,27 @@ export function SessionChatProvider({
           ? new Date(lifecycle.sandboxExpiresAt)
           : null,
       }));
+
+      void mutate<SessionsResponse>(
+        "/api/sessions",
+        (current) =>
+          current
+            ? {
+                ...current,
+                sessions: current.sessions.map((session) =>
+                  session.id === sessionId
+                    ? {
+                        ...session,
+                        lifecycleState: state,
+                      }
+                    : session,
+                ),
+              }
+            : current,
+        { revalidate: false },
+      );
     },
-    [],
+    [mutate, sessionId],
   );
 
   const attemptReconnection =

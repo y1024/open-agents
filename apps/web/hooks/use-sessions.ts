@@ -11,6 +11,7 @@ export type SessionWithUnread = Pick<
   | "id"
   | "title"
   | "status"
+  | "lifecycleState"
   | "repoOwner"
   | "repoName"
   | "branch"
@@ -70,6 +71,7 @@ function mergeSessionWithSummary(
     id: updatedSession.id,
     title: updatedSession.title,
     status: updatedSession.status,
+    lifecycleState: updatedSession.lifecycleState,
     repoOwner: updatedSession.repoOwner,
     repoName: updatedSession.repoName,
     branch: updatedSession.branch,
@@ -83,6 +85,16 @@ function mergeSessionWithSummary(
     latestChatId: session.latestChatId,
     lastActivityAt: session.lastActivityAt,
   };
+}
+
+function isSessionInTransientLifecycleState(
+  session: Pick<SessionWithUnread, "lifecycleState">,
+): boolean {
+  return (
+    session.lifecycleState === "provisioning" ||
+    session.lifecycleState === "restoring" ||
+    session.lifecycleState === "hibernating"
+  );
 }
 
 export function useSessions(options?: {
@@ -105,14 +117,15 @@ export function useSessions(options?: {
       fallbackData: initialData,
       revalidateOnMount: initialData ? false : undefined,
       refreshInterval: (latestData) => {
-        const hasStreamingSession = latestData?.sessions.some(
-          (s) => s.hasStreaming,
+        const hasActiveWorkflowSession = latestData?.sessions.some(
+          (session) =>
+            session.hasStreaming || isSessionInTransientLifecycleState(session),
         );
-        // Poll quickly while any session is streaming so we detect
-        // completion promptly for background-chat notifications.
-        // Otherwise poll every 30s to pick up external changes like
-        // PR merges delivered via GitHub webhooks.
-        return hasStreamingSession ? 3_000 : 30_000;
+        // Poll quickly while any chat workflow is streaming or the sandbox
+        // lifecycle is still transitioning so sidebar state settles promptly.
+        // Otherwise poll every 30s to pick up external changes like PR merges
+        // delivered via GitHub webhooks.
+        return hasActiveWorkflowSession ? 3_000 : 30_000;
       },
     },
   );
