@@ -180,6 +180,7 @@ export const automations = pgTable(
       ],
     }),
     lastRunSummary: text("last_run_summary"),
+    deletedAt: timestamp("deleted_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },

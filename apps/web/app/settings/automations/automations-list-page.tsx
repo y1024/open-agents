@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, GitPullRequest, Play, Zap } from "lucide-react";
+import { ArrowUp, ExternalLink, GitPullRequest, Play, Zap } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -69,8 +69,8 @@ function StatsBar() {
 
   if (isLoading) {
     return (
-      <div className="grid grid-cols-2 divide-x divide-border/60 rounded-lg border border-border/70">
-        {[1, 2].map((i) => (
+      <div className="grid grid-cols-3 divide-x divide-border/60 rounded-lg border border-border/70">
+        {[1, 2, 3].map((i) => (
           <div key={i} className="space-y-1.5 px-4 py-3">
             <Skeleton className="h-3 w-20" />
             <Skeleton className="h-6 w-10" />
@@ -88,11 +88,17 @@ function StatsBar() {
       : "0";
 
   return (
-    <div className="grid grid-cols-2 divide-x divide-border/60 rounded-lg border border-border/70">
+    <div className="grid grid-cols-3 divide-x divide-border/60 rounded-lg border border-border/70">
       <div className="px-4 py-3">
         <p className="text-xs text-muted-foreground">Total Automations</p>
         <p className="text-xl font-semibold tabular-nums">
           {stats.totalAutomations}
+        </p>
+      </div>
+      <div className="px-4 py-3">
+        <p className="text-xs text-muted-foreground">Total Runs (7d)</p>
+        <p className="text-xl font-semibold tabular-nums">
+          {stats.runs7d.total}
         </p>
       </div>
       <div className="px-4 py-3">
@@ -122,7 +128,7 @@ function QuickCreateInput() {
   }
 
   return (
-    <form onSubmit={handleSubmit}>
+    <form onSubmit={handleSubmit} className="relative">
       <textarea
         value={value}
         onChange={(e) => setValue(e.target.value)}
@@ -134,8 +140,16 @@ function QuickCreateInput() {
         }}
         placeholder="Describe what this automation should do..."
         rows={3}
-        className="border-input placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 dark:bg-input/30 w-full resize-none rounded-lg border bg-transparent px-3 py-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:ring-[3px]"
+        className="border-input placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 dark:bg-input/30 w-full resize-none rounded-lg border bg-transparent px-3 py-3 pr-12 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:ring-[3px]"
       />
+      <Button
+        type="submit"
+        size="icon"
+        disabled={!value.trim()}
+        className="absolute right-2 bottom-2 h-8 w-8 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-30"
+      >
+        <ArrowUp className="h-4 w-4" />
+      </Button>
     </form>
   );
 }
@@ -322,14 +336,35 @@ function RunHistoryTable() {
 }
 
 function RunHistoryTableRow({ run }: { run: AutomationRunWithName }) {
+  const automationLabel = (
+    <>
+      <span
+        className={cn(
+          "h-2 w-2 shrink-0 rounded-full",
+          run.automationDeleted
+            ? "bg-zinc-300"
+            : run.automationEnabled
+              ? "bg-emerald-500"
+              : "bg-zinc-400",
+        )}
+      />
+      <span>{run.automationName}</span>
+      {run.automationDeleted ? (
+        <span className="rounded-full border border-border px-1.5 py-0 text-[10px] uppercase tracking-wide text-muted-foreground">
+          Deleted
+        </span>
+      ) : null}
+    </>
+  );
+
   return (
     <TableRow>
       <TableCell>
         <Link
           href={`/settings/automations/${run.automationId}`}
-          className="text-sm font-medium hover:underline"
+          className="flex items-center gap-2 text-sm font-medium hover:underline"
         >
-          {run.automationName}
+          {automationLabel}
         </Link>
       </TableCell>
       <TableCell>

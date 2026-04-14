@@ -166,6 +166,7 @@ export function AutomationDetailPage({
     () => (automation ? getCronConfig(automation) : null),
     [automation],
   );
+  const isDeleted = automation?.deletedAt !== null;
 
   const nextPreview = useMemo(() => {
     if (!cronConfig) return "Not scheduled";
@@ -227,11 +228,19 @@ export function AutomationDetailPage({
             <span
               className={cn(
                 "h-2 w-2 rounded-full",
-                automation.enabled ? "bg-emerald-500" : "bg-zinc-400",
+                isDeleted
+                  ? "bg-zinc-300"
+                  : automation.enabled
+                    ? "bg-emerald-500"
+                    : "bg-zinc-400",
               )}
             />
             <span className="text-xs text-muted-foreground">
-              {automation.enabled ? "Enabled" : "Paused"}
+              {isDeleted
+                ? "Deleted"
+                : automation.enabled
+                  ? "Enabled"
+                  : "Paused"}
             </span>
           </div>
           <p className="font-mono text-xs text-muted-foreground">
@@ -241,69 +250,81 @@ export function AutomationDetailPage({
         </div>
 
         <div className="flex gap-2">
-          <Button
-            disabled={isRunningNow}
-            onClick={async () => {
-              setIsRunningNow(true);
-              try {
-                const result = await runNow(automation.id);
-                await mutate();
-                router.push(
-                  `/sessions/${result.session.id}/chats/${result.chat.id}`,
-                );
-              } finally {
-                setIsRunningNow(false);
-              }
-            }}
-          >
-            {isRunningNow ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Play className="h-4 w-4" />
-            )}
-            Run now
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-9 w-9">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
-                disabled={isDeleting}
+          {isDeleted ? null : (
+            <>
+              <Button
+                disabled={isRunningNow}
                 onClick={async () => {
-                  const confirmed = window.confirm(
-                    `Delete automation "${automation.name}"? Existing sessions will remain, but future runs will stop.`,
-                  );
-                  if (!confirmed) return;
-
-                  setIsDeleting(true);
+                  setIsRunningNow(true);
                   try {
-                    await deleteAutomation(automation.id);
-                    router.push("/settings/automations");
+                    const result = await runNow(automation.id);
+                    await mutate();
+                    router.push(
+                      `/sessions/${result.session.id}/chats/${result.chat.id}`,
+                    );
                   } finally {
-                    setIsDeleting(false);
+                    setIsRunningNow(false);
                   }
                 }}
               >
-                <Trash2 className="h-4 w-4" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                {isRunningNow ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Play className="h-4 w-4" />
+                )}
+                Run now
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-9 w-9">
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    disabled={isDeleting}
+                    onClick={async () => {
+                      const confirmed = window.confirm(
+                        `Delete automation "${automation.name}"? Existing sessions and run history will remain, but future runs will stop.`,
+                      );
+                      if (!confirmed) return;
+
+                      setIsDeleting(true);
+                      try {
+                        await deleteAutomation(automation.id);
+                        router.push("/settings/automations");
+                      } finally {
+                        setIsDeleting(false);
+                      }
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </>
+          )}
         </div>
       </div>
 
       <Tabs defaultValue="overview" className="block space-y-6">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="edit">Edit</TabsTrigger>
+          {isDeleted ? null : <TabsTrigger value="edit">Edit</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="overview" className="flex-none">
           <div className="space-y-8">
+            {isDeleted ? (
+              <div className="rounded-md border border-border/70 bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+                This automation was deleted on{" "}
+                {formatRunTime(automation.deletedAt)}. Its existing sessions and
+                run history are preserved, but it can no longer be edited or run
+                again.
+              </div>
+            ) : null}
             {/* ── Schedule ── */}
             <div className="space-y-4">
               <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -480,17 +501,19 @@ export function AutomationDetailPage({
           </div>
         </TabsContent>
 
-        <TabsContent value="edit" className="flex-none">
-          <AutomationForm
-            key={automation.id}
-            initialValue={toFormValue(automation)}
-            submitLabel="Save changes"
-            onSubmit={async (input) => {
-              await updateAutomation(automation.id, input);
-              await mutate();
-            }}
-          />
-        </TabsContent>
+        {isDeleted ? null : (
+          <TabsContent value="edit" className="flex-none">
+            <AutomationForm
+              key={automation.id}
+              initialValue={toFormValue(automation)}
+              submitLabel="Save changes"
+              onSubmit={async (input) => {
+                await updateAutomation(automation.id, input);
+                await mutate();
+              }}
+            />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

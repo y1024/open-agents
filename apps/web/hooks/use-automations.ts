@@ -36,6 +36,7 @@ export interface AutomationRecord {
   lastRunAt: string | null;
   lastRunStatus: string | null;
   lastRunSummary: string | null;
+  deletedAt: string | null;
   scheduleSummary: string;
   enabledToolTypes: string[];
   triggers: Array<{
@@ -207,6 +208,8 @@ export function useAutomationStats() {
 export interface AutomationRunWithName extends AutomationRunRecord {
   automationId: string;
   automationName: string;
+  automationEnabled: boolean;
+  automationDeleted: boolean;
 }
 
 type AllRunsResponse = {

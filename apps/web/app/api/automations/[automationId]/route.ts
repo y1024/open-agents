@@ -34,6 +34,7 @@ export async function GET(
   const automation = await getOwnedAutomationById({
     automationId,
     userId: authResult.userId,
+    includeDeleted: true,
   });
 
   if (!automation) {

@@ -12,15 +12,29 @@ export async function GET() {
 
   const [runs, automations] = await Promise.all([
     listAutomationRunsByUserId(authResult.userId, 50),
-    listAutomationsByUserId(authResult.userId),
+    listAutomationsByUserId(authResult.userId, { includeDeleted: true }),
   ]);
 
-  const automationNames = new Map(automations.map((a) => [a.id, a.name]));
+  const automationInfo = new Map(
+    automations.map((a) => [
+      a.id,
+      {
+        name: a.name,
+        enabled: a.enabled,
+        deleted: a.deletedAt !== null,
+      },
+    ]),
+  );
 
   return Response.json({
-    runs: runs.map((run) => ({
-      ...run,
-      automationName: automationNames.get(run.automationId) ?? "Unknown",
-    })),
+    runs: runs.map((run) => {
+      const info = automationInfo.get(run.automationId);
+      return {
+        ...run,
+        automationName: info?.name ?? "Unknown",
+        automationEnabled: info?.enabled ?? false,
+        automationDeleted: info?.deleted ?? false,
+      };
+    }),
   });
 }

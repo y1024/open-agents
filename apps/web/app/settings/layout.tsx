@@ -293,22 +293,21 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const fallbackTitle = isAutomationDetail
     ? "Automation"
     : (activeItem?.label ?? "Profile");
-  const fallbackContent =
-    isAutomationDetail ? (
-      <AutomationsDetailSkeleton />
-    ) : activeItem?.id === "automations" ? (
-      <AutomationsListSkeleton />
-    ) : activeItem?.id === "connections" ? (
-      <ConnectionsPageSkeleton />
-    ) : activeItem?.id === "preferences" ? (
-      <PreferencesSectionSkeleton />
-    ) : activeItem?.id === "model-variants" ? (
-      <ModelVariantsSectionSkeleton />
-    ) : activeItem?.id === "leaderboard" ? (
-      <LeaderboardSectionSkeleton />
-    ) : (
-      <ProfilePageSkeleton />
-    );
+  const fallbackContent = isAutomationDetail ? (
+    <AutomationsDetailSkeleton />
+  ) : activeItem?.id === "automations" ? (
+    <AutomationsListSkeleton />
+  ) : activeItem?.id === "connections" ? (
+    <ConnectionsPageSkeleton />
+  ) : activeItem?.id === "preferences" ? (
+    <PreferencesSectionSkeleton />
+  ) : activeItem?.id === "model-variants" ? (
+    <ModelVariantsSectionSkeleton />
+  ) : activeItem?.id === "leaderboard" ? (
+    <LeaderboardSectionSkeleton />
+  ) : (
+    <ProfilePageSkeleton />
+  );
 
   return (
     <AuthGuard

@@ -1,5 +1,14 @@
 import { nanoid } from "nanoid";
-import { and, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import type { GlobalSkillRef } from "@/lib/skills/global-skill-refs";
 import type {
   AutomationRunStatus,
@@ -34,6 +43,17 @@ export type AutomationRecord = Automation & {
 export type AutomationListItem = AutomationRecord & {
   latestRun: AutomationRun | null;
 };
+
+function activeAutomationWhereClause(
+  includeDeleted = false,
+  ...conditions: SQL<unknown>[]
+): SQL<unknown> {
+  if (includeDeleted) {
+    return conditions.length === 1 ? conditions[0] : and(...conditions)!;
+  }
+
+  return and(...conditions, isNull(automations.deletedAt))!;
+}
 
 async function listAutomationRelations(automationIds: string[]): Promise<{
   triggersByAutomationId: Map<string, AutomationTrigger[]>;
@@ -202,9 +222,13 @@ function toAutomationInsert(params: {
 
 export async function listAutomationsByUserId(
   userId: string,
+  options?: { includeDeleted?: boolean },
 ): Promise<AutomationListItem[]> {
   const rows = await db.query.automations.findMany({
-    where: eq(automations.userId, userId),
+    where: activeAutomationWhereClause(
+      options?.includeDeleted,
+      eq(automations.userId, userId),
+    ),
     orderBy: [desc(automations.updatedAt), desc(automations.createdAt)],
   });
   const automationIds = rows.map((row) => row.id);
@@ -224,9 +248,13 @@ export async function listAutomationsByUserId(
 
 export async function getAutomationById(
   automationId: string,
+  options?: { includeDeleted?: boolean },
 ): Promise<AutomationRecord | null> {
   const automation = await db.query.automations.findFirst({
-    where: eq(automations.id, automationId),
+    where: activeAutomationWhereClause(
+      options?.includeDeleted,
+      eq(automations.id, automationId),
+    ),
   });
 
   if (!automation) {
@@ -245,8 +273,11 @@ export async function getAutomationById(
 export async function getOwnedAutomationById(params: {
   automationId: string;
   userId: string;
+  includeDeleted?: boolean;
 }): Promise<AutomationRecord | null> {
-  const automation = await getAutomationById(params.automationId);
+  const automation = await getAutomationById(params.automationId, {
+    includeDeleted: params.includeDeleted,
+  });
   if (!automation || automation.userId !== params.userId) {
     return null;
   }
@@ -322,7 +353,8 @@ export async function updateAutomationDefinition(params: {
         updatedAt: new Date(),
       })
       .where(
-        and(
+        activeAutomationWhereClause(
+          false,
           eq(automations.id, params.automationId),
           eq(automations.userId, params.userId),
         ),
@@ -370,9 +402,18 @@ export async function deleteAutomationDefinition(params: {
   userId: string;
 }) {
   const [deleted] = await db
-    .delete(automations)
+    .update(automations)
+    .set({
+      enabled: false,
+      nextRunAt: null,
+      schedulerRunId: null,
+      schedulerState: "paused",
+      deletedAt: new Date(),
+      updatedAt: new Date(),
+    })
     .where(
-      and(
+      activeAutomationWhereClause(
+        false,
         eq(automations.id, params.automationId),
         eq(automations.userId, params.userId),
       ),
