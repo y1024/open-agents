@@ -5,6 +5,9 @@ const MANAGED_TEMPLATE_HOSTS = new Set([
   "open-agents.dev",
   "www.open-agents.dev",
 ]);
+const MANAGED_TEMPLATE_TRIAL_RESTRICTED_MODEL_PREFIXES = [
+  "anthropic/claude-opus-",
+];
 
 export const MANAGED_TEMPLATE_TRIAL_MESSAGE_LIMIT = 5;
 export const MANAGED_TEMPLATE_TRIAL_SESSION_LIMIT = 1;
@@ -67,5 +70,27 @@ export function isManagedTemplateTrialUser(
     session?.authProvider === "vercel" &&
     isManagedTemplateDeployment(url) &&
     !hasAllowedManagedTemplateEmail(session.user.email)
+  );
+}
+
+export function isManagedTemplateTrialRestrictedModel(modelId: string) {
+  return MANAGED_TEMPLATE_TRIAL_RESTRICTED_MODEL_PREFIXES.some((prefix) =>
+    modelId.startsWith(prefix),
+  );
+}
+
+export function filterManagedTemplateTrialRestrictedModels<
+  T extends { id: string },
+>(
+  models: T[],
+  session: Pick<Session, "authProvider" | "user"> | null | undefined,
+  url: string | URL,
+): T[] {
+  if (!isManagedTemplateTrialUser(session, url)) {
+    return models;
+  }
+
+  return models.filter(
+    (model) => !isManagedTemplateTrialRestrictedModel(model.id),
   );
 }

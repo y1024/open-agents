@@ -1,3 +1,4 @@
+import { headers } from "next/headers";
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import type { WebAgentUIMessage } from "@/app/types";
@@ -9,6 +10,7 @@ import {
 } from "@/lib/db/sessions";
 import { getSessionByIdCached } from "@/lib/db/sessions-cache";
 import { getUserPreferences } from "@/lib/db/user-preferences";
+import { filterManagedTemplateTrialRestrictedModels } from "@/lib/managed-template-trial";
 import {
   buildSessionChatModelOptions,
   withMissingModelOption,
@@ -37,9 +39,19 @@ function isOptimisticChatId(chatId: string): boolean {
 const OPTIMISTIC_CHAT_RETRY_DELAY_MS = 100;
 const OPTIMISTIC_CHAT_RETRY_ATTEMPTS = 50;
 
-async function getInitialModels() {
+async function getInitialModels(
+  session: Awaited<ReturnType<typeof getServerSession>>,
+) {
   try {
-    return await fetchAvailableLanguageModelsWithContext();
+    const requestHeaders = await headers();
+    const requestHost =
+      requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
+
+    return filterManagedTemplateTrialRestrictedModels(
+      await fetchAvailableLanguageModelsWithContext(),
+      session,
+      requestHost ?? "",
+    );
   } catch {
     return [];
   }
@@ -107,7 +119,7 @@ export default async function SessionChatPage({
     await Promise.all([
       getChatByIdWithRetry(chatId, sessionId),
       getChatMessages(chatId),
-      getInitialModels(),
+      getInitialModels(session),
       getUserPreferences(session.user.id),
       getChatSummariesBySessionId(sessionId, session.user.id),
     ]);

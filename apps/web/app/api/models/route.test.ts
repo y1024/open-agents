@@ -13,6 +13,10 @@ const requestedUrls: string[] = [];
 
 let gatewayError: unknown = null;
 let modelsDevApiData: unknown = {};
+let serverSession: {
+  authProvider: "vercel" | "github";
+  user: { email?: string | undefined };
+} | null = null;
 
 const originalFetch = globalThis.fetch;
 
@@ -39,6 +43,9 @@ mock.module("ai", () => ({
 }));
 
 mock.module("server-only", () => ({}));
+mock.module("@/lib/session/get-server-session", () => ({
+  getServerSession: async () => serverSession,
+}));
 
 const routeModulePromise = import("./route");
 
@@ -52,6 +59,7 @@ describe("/api/models context window enrichment", () => {
     requestedUrls.length = 0;
     gatewayError = null;
     modelsDevApiData = {};
+    serverSession = null;
 
     globalThis.fetch = mock((input: RequestInfo | URL, _init?: RequestInit) => {
       requestedUrls.push(getRequestUrl(input));
@@ -106,7 +114,9 @@ describe("/api/models context window enrichment", () => {
     };
 
     const { GET } = await routeModulePromise;
-    const response = await GET();
+    const response = await GET(
+      new Request("https://open-agents.dev/api/models"),
+    );
 
     expect(response.ok).toBe(true);
 
@@ -122,6 +132,40 @@ describe("/api/models context window enrichment", () => {
     expect(contextById.get("openai/gpt-4o-mini")).toBe(128_000);
     expect(contextById.has("openai/image-gen")).toBe(false);
     expect(requestedUrls).toContain("https://models.dev/api.json");
+  });
+
+  test("filters Opus models for managed template trial users", async () => {
+    gatewayModels.push(
+      {
+        id: "anthropic/claude-opus-4.6",
+        modelType: "language",
+        context_window: 200_000,
+      },
+      {
+        id: "anthropic/claude-haiku-4.5",
+        modelType: "language",
+        context_window: 200_000,
+      },
+    );
+    serverSession = {
+      authProvider: "vercel",
+      user: {
+        email: "person@example.com",
+      },
+    };
+
+    const { GET } = await routeModulePromise;
+    const response = await GET(
+      new Request("https://open-agents.dev/api/models"),
+    );
+    const body = (await response.json()) as {
+      models: Array<{ id: string }>;
+    };
+
+    expect(response.ok).toBe(true);
+    expect(body.models.map((model) => model.id)).toEqual([
+      "anthropic/claude-haiku-4.5",
+    ]);
   });
 
   test("keeps gateway context window when models.dev only has related ids", async () => {
@@ -145,7 +189,9 @@ describe("/api/models context window enrichment", () => {
     };
 
     const { GET } = await routeModulePromise;
-    const response = await GET();
+    const response = await GET(
+      new Request("https://open-agents.dev/api/models"),
+    );
 
     expect(response.ok).toBe(true);
 
@@ -187,7 +233,9 @@ describe("/api/models context window enrichment", () => {
     };
 
     const { GET } = await routeModulePromise;
-    const response = await GET();
+    const response = await GET(
+      new Request("https://open-agents.dev/api/models"),
+    );
 
     expect(response.ok).toBe(true);
 
@@ -244,7 +292,9 @@ describe("/api/models context window enrichment", () => {
     };
 
     const { GET } = await routeModulePromise;
-    const response = await GET();
+    const response = await GET(
+      new Request("https://open-agents.dev/api/models"),
+    );
 
     expect(response.ok).toBe(true);
 

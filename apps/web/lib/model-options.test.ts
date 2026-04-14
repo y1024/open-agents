@@ -62,6 +62,22 @@ describe("model options", () => {
     ]);
   });
 
+  test("buildModelOptions omits variants whose base model is unavailable", () => {
+    const options = buildModelOptions(
+      [],
+      [
+        {
+          id: "variant:missing-base",
+          name: "Missing Base",
+          baseModelId: "anthropic/claude-opus-4.6",
+          providerOptions: {},
+        },
+      ],
+    );
+
+    expect(options).toEqual([]);
+  });
+
   test("withMissingModelOption appends missing variant option", () => {
     const result = withMissingModelOption([], "variant:removed");
 

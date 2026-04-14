@@ -54,9 +54,10 @@ export function buildModelOptions(
   const baseModelOptions = models.map(toBaseModelOption);
   const baseModelsById = new Map(models.map((model) => [model.id, model]));
 
-  const variantOptions = modelVariants.map((variant) =>
-    toVariantOption(variant, baseModelsById.get(variant.baseModelId)),
-  );
+  const variantOptions = modelVariants.flatMap((variant) => {
+    const baseModel = baseModelsById.get(variant.baseModelId);
+    return baseModel ? [toVariantOption(variant, baseModel)] : [];
+  });
 
   return [...baseModelOptions, ...variantOptions];
 }
