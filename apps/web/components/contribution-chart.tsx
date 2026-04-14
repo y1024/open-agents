@@ -26,7 +26,6 @@ interface ContributionChartProps {
 
 const DAYS_IN_WEEK = 7;
 const WEEKS = 39;
-const DAY_LABELS = ["", "Mon", "", "Wed", "", "Fri", ""];
 
 function getIntensity(
   value: number,
@@ -76,17 +75,16 @@ function formatDateKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-const DAY_LABEL_WIDTH = 32;
-const CELL_GAP = 2;
+const CELL_SIZE = 11;
+const CELL_GAP = 3;
 const LEGEND_CELL_SIZE = 12;
-const MIN_CELL_SIZE = 10;
 
 export function ContributionChart({
   data,
   selectedRange,
   onSelectRange,
 }: ContributionChartProps) {
-  const { grid, monthLabels, selectedBounds, thresholds } = useMemo(() => {
+  const { grid, selectedBounds, thresholds } = useMemo(() => {
     const dataMap = new Map<string, DayData>();
     for (const d of data) {
       dataMap.set(d.date, d);
@@ -127,23 +125,6 @@ export function ContributionChart({
       weeks.push(cells.slice(i, i + DAYS_IN_WEEK));
     }
 
-    const months: Array<{ label: string; weekIndex: number }> = [];
-    let lastMonth = -1;
-    for (let w = 0; w < weeks.length; w++) {
-      const firstDay = weeks[w]?.[0];
-      if (!firstDay) continue;
-      const month = parseDateKey(firstDay.date).getMonth();
-      if (month !== lastMonth) {
-        lastMonth = month;
-        months.push({
-          label: parseDateKey(firstDay.date).toLocaleDateString("en-US", {
-            month: "short",
-          }),
-          weekIndex: w,
-        });
-      }
-    }
-
     const rangeFrom = selectedRange?.from
       ? formatDateKey(selectedRange.from)
       : null;
@@ -159,15 +140,13 @@ export function ContributionChart({
 
     return {
       grid: weeks,
-      monthLabels: months,
       selectedBounds: bounds,
       thresholds: t,
     };
   }, [data, selectedRange]);
 
   const weekCount = grid.length;
-  const minGridWidth =
-    DAY_LABEL_WIDTH + weekCount * MIN_CELL_SIZE + (weekCount - 1) * CELL_GAP;
+  const minGridWidth = weekCount * CELL_SIZE + (weekCount - 1) * CELL_GAP;
 
   function handleDateSelect(date: string) {
     if (!onSelectRange) {
@@ -195,145 +174,119 @@ export function ContributionChart({
   }
 
   return (
-    <div className="flex flex-col gap-1 overflow-x-auto">
+    <div className="flex flex-col gap-1">
+      {/* direction:rtl makes the scroll container start at the right (most recent).
+          The inner grid resets to direction:ltr so visual order is correct. */}
       <div
-        className="grid"
-        style={{
-          gridTemplateColumns: `${DAY_LABEL_WIDTH}px repeat(${weekCount}, 1fr)`,
-          columnGap: CELL_GAP,
-          minWidth: minGridWidth,
-        }}
+        className="overflow-x-auto scrollbar-fade"
+        style={{ direction: "rtl" }}
       >
-        {monthLabels.map((m, i) => (
-          <span
-            key={`${m.label}-${i}`}
-            className="whitespace-nowrap text-xs text-muted-foreground"
-            style={{
-              gridColumn: m.weekIndex + 2,
-              gridRow: 1,
-            }}
-          >
-            {m.label}
-          </span>
-        ))}
-      </div>
+        <div
+          className="grid"
+          style={{
+            direction: "ltr",
+            gridTemplateColumns: `repeat(${weekCount}, 1fr)`,
+            gridTemplateRows: `repeat(${DAYS_IN_WEEK}, auto)`,
+            gap: CELL_GAP,
+            minWidth: minGridWidth,
+          }}
+        >
+          {grid.flatMap((week, wi) =>
+            week.map((cell, di) => {
+              if (cell.isFuture) {
+                return (
+                  <div
+                    key={cell.date}
+                    style={{
+                      gridColumn: wi + 1,
+                      gridRow: di + 1,
+                      aspectRatio: "1 / 1",
+                    }}
+                  />
+                );
+              }
 
-      <div
-        className="grid"
-        style={{
-          gridTemplateColumns: `${DAY_LABEL_WIDTH}px repeat(${weekCount}, 1fr)`,
-          gridTemplateRows: `repeat(${DAYS_IN_WEEK}, auto)`,
-          gap: CELL_GAP,
-          minWidth: minGridWidth,
-        }}
-      >
-        {DAY_LABELS.map((label, i) => (
-          <span
-            key={i}
-            className="flex items-center text-xs leading-none text-muted-foreground"
-            style={{ gridColumn: 1, gridRow: i + 1 }}
-          >
-            {label}
-          </span>
-        ))}
+              const messageCount = cell.data?.messageCount ?? 0;
+              const intensity = getIntensity(messageCount, thresholds);
+              const hasActiveSelection = selectedBounds !== null;
+              const isSelected =
+                hasActiveSelection &&
+                cell.date >= selectedBounds.from &&
+                cell.date <= selectedBounds.to;
+              const totalTokens =
+                (cell.data?.inputTokens ?? 0) + (cell.data?.outputTokens ?? 0);
+              const isInteractive = typeof onSelectRange === "function";
 
-        {grid.flatMap((week, wi) =>
-          week.map((cell, di) => {
-            if (cell.isFuture) {
-              return (
-                <div
-                  key={cell.date}
+              const cellContent = isInteractive ? (
+                <button
+                  type="button"
+                  aria-label={`Usage for ${formatDate(cell.date)}`}
+                  aria-pressed={isSelected}
+                  className={cn(
+                    "block aspect-square w-full rounded-[3px] transition-[filter,opacity,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-1",
+                    "hover:opacity-85",
+                    INTENSITY_CLASSES[intensity],
+                    hasActiveSelection &&
+                      !isSelected &&
+                      "grayscale opacity-35 saturate-0",
+                    isSelected &&
+                      "ring-2 ring-neutral-700/60 ring-offset-1 shadow-[0_0_0_1px_rgba(255,255,255,0.9)] dark:ring-neutral-100/80 dark:shadow-[0_0_0_1px_rgba(3,7,18,0.9)]",
+                  )}
                   style={{
-                    gridColumn: wi + 2,
+                    gridColumn: wi + 1,
                     gridRow: di + 1,
-                    aspectRatio: "1 / 1",
+                  }}
+                  onClick={() => handleDateSelect(cell.date)}
+                />
+              ) : (
+                <div
+                  className={cn(
+                    "aspect-square rounded-[3px] transition-[filter,opacity,box-shadow]",
+                    INTENSITY_CLASSES[intensity],
+                    hasActiveSelection &&
+                      !isSelected &&
+                      "grayscale opacity-35 saturate-0",
+                    isSelected &&
+                      "ring-2 ring-neutral-700/60 ring-offset-1 shadow-[0_0_0_1px_rgba(255,255,255,0.9)] dark:ring-neutral-100/80 dark:shadow-[0_0_0_1px_rgba(3,7,18,0.9)]",
+                  )}
+                  style={{
+                    gridColumn: wi + 1,
+                    gridRow: di + 1,
                   }}
                 />
               );
-            }
 
-            const messageCount = cell.data?.messageCount ?? 0;
-            const intensity = getIntensity(messageCount, thresholds);
-            const hasActiveSelection = selectedBounds !== null;
-            const isSelected =
-              hasActiveSelection &&
-              cell.date >= selectedBounds.from &&
-              cell.date <= selectedBounds.to;
-            const totalTokens =
-              (cell.data?.inputTokens ?? 0) + (cell.data?.outputTokens ?? 0);
-            const isInteractive = typeof onSelectRange === "function";
-
-            const cellContent = isInteractive ? (
-              <button
-                type="button"
-                aria-label={`Usage for ${formatDate(cell.date)}`}
-                aria-pressed={isSelected}
-                className={cn(
-                  "block w-full rounded-[3px] transition-[filter,opacity,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-1",
-                  "hover:opacity-85",
-                  INTENSITY_CLASSES[intensity],
-                  hasActiveSelection &&
-                    !isSelected &&
-                    "grayscale opacity-35 saturate-0",
-                  isSelected &&
-                    "ring-2 ring-neutral-700/60 ring-offset-1 shadow-[0_0_0_1px_rgba(255,255,255,0.9)] dark:ring-neutral-100/80 dark:shadow-[0_0_0_1px_rgba(3,7,18,0.9)]",
-                )}
-                style={{
-                  gridColumn: wi + 2,
-                  gridRow: di + 1,
-                  aspectRatio: "1 / 1",
-                }}
-                onClick={() => handleDateSelect(cell.date)}
-              />
-            ) : (
-              <div
-                className={cn(
-                  "rounded-[3px] transition-[filter,opacity,box-shadow]",
-                  INTENSITY_CLASSES[intensity],
-                  hasActiveSelection &&
-                    !isSelected &&
-                    "grayscale opacity-35 saturate-0",
-                  isSelected &&
-                    "ring-2 ring-neutral-700/60 ring-offset-1 shadow-[0_0_0_1px_rgba(255,255,255,0.9)] dark:ring-neutral-100/80 dark:shadow-[0_0_0_1px_rgba(3,7,18,0.9)]",
-                )}
-                style={{
-                  gridColumn: wi + 2,
-                  gridRow: di + 1,
-                  aspectRatio: "1 / 1",
-                }}
-              />
-            );
-
-            return (
-              <Tooltip key={cell.date}>
-                <TooltipTrigger asChild>{cellContent}</TooltipTrigger>
-                <TooltipContent side="top">
-                  <div className="text-xs">
-                    <div className="font-medium">{formatDate(cell.date)}</div>
-                    {messageCount > 0 ? (
-                      <div className="font-mono tabular-nums">
-                        <div>
-                          {messageCount} message
-                          {messageCount !== 1 ? "s" : ""}
+              return (
+                <Tooltip key={cell.date}>
+                  <TooltipTrigger asChild>{cellContent}</TooltipTrigger>
+                  <TooltipContent side="top">
+                    <div className="text-xs">
+                      <div className="font-medium">{formatDate(cell.date)}</div>
+                      {messageCount > 0 ? (
+                        <div className="font-mono tabular-nums">
+                          <div>
+                            {messageCount} message
+                            {messageCount !== 1 ? "s" : ""}
+                          </div>
+                          <div>{formatTokens(totalTokens)} tokens</div>
+                          <div>
+                            {cell.data?.toolCallCount ?? 0} tool call
+                            {(cell.data?.toolCallCount ?? 0) !== 1 ? "s" : ""}
+                          </div>
                         </div>
-                        <div>{formatTokens(totalTokens)} tokens</div>
-                        <div>
-                          {cell.data?.toolCallCount ?? 0} tool call
-                          {(cell.data?.toolCallCount ?? 0) !== 1 ? "s" : ""}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="text-muted-foreground">No activity</div>
-                    )}
-                  </div>
-                </TooltipContent>
-              </Tooltip>
-            );
-          }),
-        )}
+                      ) : (
+                        <div className="text-muted-foreground">No activity</div>
+                      )}
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              );
+            }),
+          )}
+        </div>
       </div>
 
-      <div className="mt-1 flex items-center justify-end gap-1 text-xs text-muted-foreground">
+      <div className="mt-3 flex items-center justify-end gap-1 text-xs text-muted-foreground">
         <span>Less</span>
         {INTENSITY_CLASSES.map((cls, i) => (
           <div
