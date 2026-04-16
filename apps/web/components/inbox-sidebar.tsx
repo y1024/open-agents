@@ -5,6 +5,7 @@ import {
   ChevronDown,
   CircleDashed,
   FolderGit2,
+  MessageSquare,
   GitBranch,
   GitMerge,
   GitPullRequest,
@@ -158,6 +159,14 @@ function getSessionStatusIcon(session: SessionWithUnread) {
   if (session.branch) {
     return (
       <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+    );
+  }
+
+  // No repository — plain chat session
+  const isChat = !session.repoName?.trim();
+  if (isChat) {
+    return (
+      <CircleDashed className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
     );
   }
 
@@ -1047,7 +1056,7 @@ export function InboxSidebar({
                       >
                         <span className="flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground/80">
                           {group.id === "repo:unscoped" ? (
-                            <CircleDashed className="h-3.5 w-3.5 group-hover/repo:hidden" />
+                            <MessageSquare className="h-3.5 w-3.5 group-hover/repo:hidden" />
                           ) : (
                             <FolderGit2 className="h-3.5 w-3.5 group-hover/repo:hidden" />
                           )}
