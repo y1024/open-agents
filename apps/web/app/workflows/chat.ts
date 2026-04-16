@@ -468,7 +468,17 @@ export async function runAgentWorkflow(options: Options) {
   // it runs. Persisting from inside the workflow guarantees that as long as
   // the workflow is running, the chat row points at it and the client can
   // resume on refresh.
-  await claimActiveStream(options.chatId, workflowRunId);
+  const activeStreamClaim = await claimActiveStream(
+    options.chatId,
+    workflowRunId,
+  );
+  if (activeStreamClaim === "conflict") {
+    // Another workflow claimed the slot while this run was queued or starting.
+    // Exit before emitting chunks or persisting messages so only the owning
+    // workflow can mutate this chat.
+    await closeStream(writable);
+    return;
+  }
 
   const [modelMessages, assistantId] = await Promise.all([
     convertMessages(options.messages),

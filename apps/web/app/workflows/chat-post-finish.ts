@@ -226,6 +226,8 @@ export async function clearActiveStream(
 const ACTIVE_STREAM_CLAIM_MAX_ATTEMPTS = 3;
 const ACTIVE_STREAM_CLAIM_RETRY_DELAY_MS = 50;
 
+export type ClaimActiveStreamResult = "claimed" | "conflict" | "error";
+
 /**
  * First-step self-registration of the workflow's runId onto the chat.
  *
@@ -240,14 +242,15 @@ const ACTIVE_STREAM_CLAIM_RETRY_DELAY_MS = 50;
  * claimed. Idempotent with the handler's CAS — whichever writes first wins,
  * the other is a no-op.
  *
- * Returns true on claim/owned, false on conflict (someone else owns the
- * slot, which should never happen in practice because the HTTP handler
- * returns 409 when it detects a conflict before calling `start()`).
+ * Returns:
+ * - `"claimed"` when the slot is now owned by this workflow run.
+ * - `"conflict"` when a different run already owns the slot.
+ * - `"error"` when the claim could not be persisted after retries.
  */
 export async function claimActiveStream(
   chatId: string,
   workflowRunId: string,
-): Promise<boolean> {
+): Promise<ClaimActiveStreamResult> {
   "use step";
 
   for (
@@ -262,20 +265,21 @@ export async function claimActiveStream(
           "[workflow] activeStreamId slot owned by a different run:",
           { chatId, workflowRunId },
         );
+        return "conflict";
       }
-      return ok;
+      return "claimed";
     } catch (error) {
       if (attempt === ACTIVE_STREAM_CLAIM_MAX_ATTEMPTS) {
         console.error("[workflow] Failed to claim activeStreamId:", error);
         // Non-fatal: workflow can still run, just won't be resumable.
-        return false;
+        return "error";
       }
 
       await delay(ACTIVE_STREAM_CLAIM_RETRY_DELAY_MS);
     }
   }
 
-  return false;
+  return "error";
 }
 
 function delay(ms: number) {
