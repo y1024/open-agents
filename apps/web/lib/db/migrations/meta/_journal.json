@@ -211,6 +211,13 @@
       "when": 1776172174846,
       "tag": "0029_new_speed",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1776345202683,
+      "tag": "0030_complex_captain_universe",
+      "breakpoints": true
     }
   ]
 }

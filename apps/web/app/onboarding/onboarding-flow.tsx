@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { Check, Github, Loader2 } from "lucide-react";
@@ -105,6 +105,7 @@ export function OnboardingFlow() {
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Something went wrong",
+        { position: "bottom-left" },
       );
       setIsCompleting(false);
     }
@@ -206,7 +207,6 @@ export function OnboardingFlow() {
                         )}
                         {step.id === 2 && (
                           <GitHubConnector
-                            isActive={isActive}
                             onComplete={() => markComplete(2)}
                           />
                         )}
@@ -257,18 +257,8 @@ function TeamSelector({ onComplete }: { onComplete: () => void }) {
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [isExchanging, setIsExchanging] = useState(false);
   const [isDone, setIsDone] = useState(false);
-  const autoSelectedRef = useRef(false);
 
   const teams = data?.teams ?? [];
-
-  // Auto-select if only one team
-  useEffect(() => {
-    if (teams.length === 1 && !autoSelectedRef.current && !isDone) {
-      autoSelectedRef.current = true;
-      handleSelectTeam(teams[0]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teams.length]);
 
   const handleSelectTeam = async (team: VercelTeam) => {
     setSelectedTeamId(team.id);
@@ -284,11 +274,11 @@ function TeamSelector({ onComplete }: { onComplete: () => void }) {
         throw new Error(body.error ?? "Failed to exchange API key");
       }
       setIsDone(true);
-      toast.success(`Connected to ${team.name}`);
       onComplete();
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Failed to connect team",
+        { position: "bottom-left" },
       );
       setSelectedTeamId(null);
     } finally {
@@ -365,60 +355,45 @@ function TeamSelector({ onComplete }: { onComplete: () => void }) {
 
 // ─── Step 2: GitHub Connector ───────────────────────────────────────────────
 
-function GitHubConnector({
-  isActive,
-  onComplete,
-}: {
-  isActive: boolean;
-  onComplete: () => void;
-}) {
+function GitHubConnector({ onComplete }: { onComplete: () => void }) {
   const { session, loading, hasGitHubAccount, hasGitHubInstallations } =
     useSession();
-  const hasCalledComplete = useRef(false);
 
   const isConnected = hasGitHubAccount && hasGitHubInstallations;
-
-  // Only auto-complete when this step is actually active
-  useEffect(() => {
-    if (isActive && isConnected && !hasCalledComplete.current) {
-      hasCalledComplete.current = true;
-      onComplete();
-    }
-  }, [isActive, isConnected, onComplete]);
 
   if (loading) {
     return <Skeleton className="h-10 w-full rounded bg-white/5" />;
   }
 
-  if (isConnected) {
-    return (
-      <div className="flex items-center gap-2.5">
-        <Check className="size-4 text-emerald-500" strokeWidth={2.5} />
-        <span className="text-sm text-zinc-300">
-          Connected as{" "}
-          <span className="text-white">{session?.user?.name ?? "GitHub"}</span>
-        </span>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-3">
-      <a href="/api/auth/github/reconnect?next=/onboarding">
-        <Button
-          variant="outline"
-          className="gap-2 border-zinc-700 bg-transparent text-zinc-300 hover:bg-white/5 hover:text-white"
-        >
-          <Github className="size-4" />
-          Connect GitHub
-        </Button>
-      </a>
+      {isConnected ? (
+        <div className="flex items-center gap-2.5">
+          <Check className="size-4 text-emerald-500" strokeWidth={2.5} />
+          <span className="text-sm text-zinc-300">
+            Connected as{" "}
+            <span className="text-white">
+              {session?.user?.name ?? "GitHub"}
+            </span>
+          </span>
+        </div>
+      ) : (
+        <a href="/api/auth/github/reconnect?next=/onboarding">
+          <Button
+            variant="outline"
+            className="gap-2 border-zinc-700 bg-transparent text-zinc-300 hover:bg-white/5 hover:text-white"
+          >
+            <Github className="size-4" />
+            Connect GitHub
+          </Button>
+        </a>
+      )}
       <button
         type="button"
         onClick={onComplete}
         className="block text-xs text-zinc-600 underline-offset-2 transition-colors hover:text-zinc-400 hover:underline"
       >
-        Skip for now
+        {isConnected ? "Continue" : "Skip for now"}
       </button>
     </div>
   );
@@ -454,12 +429,12 @@ function ModelSelector({ onComplete }: { onComplete: () => void }) {
     setIsSaving(true);
     try {
       await updatePreferences({ defaultModelId: id });
-      toast.success("Default model saved");
       setIsDone(true);
       onComplete();
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Failed to save preference",
+        { position: "bottom-left" },
       );
     } finally {
       setIsSaving(false);

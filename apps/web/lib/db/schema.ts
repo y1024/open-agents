@@ -416,6 +416,8 @@ export const vercelConnections = pgTable("vercel_connections", {
   teamSlug: text("team_slug"),
   // Encrypted AI Gateway API key scoped to the selected team
   gatewayApiKey: text("gateway_api_key"),
+  // Vercel-side API key ID, used to revoke the key on team switch
+  gatewayApiKeyId: text("gateway_api_key_id"),
   gatewayApiKeyObtainedAt: timestamp("gateway_api_key_obtained_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

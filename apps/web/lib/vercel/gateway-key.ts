@@ -16,6 +16,9 @@ const GATEWAY_KEY_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 
 interface ExchangeApiKeyResponse {
   apiKeyString?: string;
+  apiKey?: {
+    id?: string;
+  };
 }
 
 /**
@@ -28,7 +31,7 @@ async function exchangeTokenForGatewayKey(params: {
   token: string;
   teamId: string;
   userName?: string;
-}): Promise<string> {
+}): Promise<{ apiKeyString: string; apiKeyId: string | null }> {
   const keyName = params.userName
     ? `${params.userName} - Open Agents`
     : "Open Agents";
@@ -48,12 +51,42 @@ async function exchangeTokenForGatewayKey(params: {
     throw new Error("Vercel API did not return an API key");
   }
 
-  return response.apiKeyString;
+  return {
+    apiKeyString: response.apiKeyString,
+    apiKeyId: response.apiKey?.id ?? null,
+  };
+}
+
+/**
+ * Revoke a previously-created AI Gateway API key.
+ * Best-effort — failures are logged but don't block the caller.
+ */
+async function revokeGatewayApiKey(params: {
+  token: string;
+  teamId: string;
+  apiKeyId: string;
+}): Promise<void> {
+  try {
+    await fetchVercelApi({
+      method: "DELETE",
+      path: `/api-keys/${encodeURIComponent(params.apiKeyId)}`,
+      token: params.token,
+      query: new URLSearchParams({ teamId: params.teamId }),
+    });
+  } catch (error) {
+    // Best-effort cleanup — log and continue
+    console.warn("[gateway-key] Failed to revoke old API key:", {
+      apiKeyId: params.apiKeyId,
+      teamId: params.teamId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**
  * Obtain (or refresh) a gateway API key for the user's selected team.
- * Stores the encrypted key in the `vercel_connections` table.
+ * Revokes the previous key if switching teams, then stores the new
+ * encrypted key in the `vercel_connections` table.
  *
  * Returns the plaintext API key or null if the exchange failed.
  */
@@ -68,7 +101,26 @@ export async function obtainGatewayApiKey(params: {
   }
 
   try {
-    const apiKey = await exchangeTokenForGatewayKey({
+    // Revoke the old key if one exists
+    const [existing] = await db
+      .select({
+        gatewayApiKeyId: vercelConnections.gatewayApiKeyId,
+        teamId: vercelConnections.teamId,
+      })
+      .from(vercelConnections)
+      .where(eq(vercelConnections.userId, params.userId))
+      .limit(1);
+
+    if (existing?.gatewayApiKeyId && existing.teamId) {
+      await revokeGatewayApiKey({
+        token,
+        teamId: existing.teamId,
+        apiKeyId: existing.gatewayApiKeyId,
+      });
+    }
+
+    // Create a new key for the selected team
+    const { apiKeyString, apiKeyId } = await exchangeTokenForGatewayKey({
       token,
       teamId: params.teamId,
       userName: params.userName,
@@ -82,7 +134,8 @@ export async function obtainGatewayApiKey(params: {
         id: nanoid(),
         userId: params.userId,
         teamId: params.teamId,
-        gatewayApiKey: encrypt(apiKey),
+        gatewayApiKey: encrypt(apiKeyString),
+        gatewayApiKeyId: apiKeyId,
         gatewayApiKeyObtainedAt: now,
         updatedAt: now,
       })
@@ -90,13 +143,14 @@ export async function obtainGatewayApiKey(params: {
         target: vercelConnections.userId,
         set: {
           teamId: params.teamId,
-          gatewayApiKey: encrypt(apiKey),
+          gatewayApiKey: encrypt(apiKeyString),
+          gatewayApiKeyId: apiKeyId,
           gatewayApiKeyObtainedAt: now,
           updatedAt: now,
         },
       });
 
-    return apiKey;
+    return apiKeyString;
   } catch (error) {
     console.error("[gateway-key] Failed to exchange token for gateway key:", {
       error: error instanceof Error ? error.message : String(error),
@@ -161,8 +215,31 @@ export async function getUserGatewayConfig(
 
 /**
  * Clear the user's gateway API key and team selection.
+ * Revokes the key in Vercel before deleting the local record.
  */
 export async function clearGatewayConfig(userId: string): Promise<void> {
+  const token = await getUserVercelToken(userId);
+
+  // Revoke the key in Vercel if possible
+  if (token) {
+    const [existing] = await db
+      .select({
+        gatewayApiKeyId: vercelConnections.gatewayApiKeyId,
+        teamId: vercelConnections.teamId,
+      })
+      .from(vercelConnections)
+      .where(eq(vercelConnections.userId, userId))
+      .limit(1);
+
+    if (existing?.gatewayApiKeyId && existing.teamId) {
+      await revokeGatewayApiKey({
+        token,
+        teamId: existing.teamId,
+        apiKeyId: existing.gatewayApiKeyId,
+      });
+    }
+  }
+
   await db
     .delete(vercelConnections)
     .where(eq(vercelConnections.userId, userId));
