@@ -45,15 +45,11 @@ export async function GET(req: NextRequest): Promise<Response> {
     sameSite: "lax",
   });
 
-  const forceConsent =
-    req.nextUrl.searchParams.get("consent") === "1";
-
   const url = getVercelAuthorizationUrl({
     clientId,
     redirectUri,
     state,
     codeChallenge,
-    forceConsent,
   });
 
   return Response.redirect(url);

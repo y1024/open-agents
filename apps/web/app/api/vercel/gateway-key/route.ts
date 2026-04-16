@@ -51,6 +51,7 @@ export async function POST(req: Request) {
     const apiKey = await obtainGatewayApiKey({
       userId: session.user.id,
       teamId,
+      userName: session.user.name,
     });
 
     if (!apiKey) {

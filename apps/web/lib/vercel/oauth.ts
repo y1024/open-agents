@@ -19,7 +19,6 @@ export function getVercelAuthorizationUrl(params: {
   redirectUri: string;
   state: string;
   codeChallenge: string;
-  forceConsent?: boolean;
 }): string {
   const searchParams = new URLSearchParams({
     client_id: params.clientId,
@@ -30,9 +29,6 @@ export function getVercelAuthorizationUrl(params: {
     code_challenge_method: "S256",
     state: params.state,
   });
-  if (params.forceConsent) {
-    searchParams.set("prompt", "consent");
-  }
   return `${VERCEL_AUTHORIZE_URL}?${searchParams.toString()}`;
 }
 
