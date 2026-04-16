@@ -3,16 +3,15 @@
 import { useCallback, useState } from "react";
 import Image from "next/image";
 import useSWR, { useSWRConfig } from "swr";
-import { DollarSign, Loader2 } from "lucide-react";
+import { ChevronDown, DollarSign, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useSession } from "@/hooks/use-session";
 import { fetcher } from "@/lib/swr";
 
@@ -55,10 +54,12 @@ function formatCredits(balance: string): string | null {
     return "Flexible Billing";
   }
 
-  return num.toLocaleString("en-US", {
+  const formatted = num.toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+
+  return num > 0 ? `${formatted} Credit` : formatted;
 }
 
 function CreditsBadge({ teamId }: { teamId: string }) {
@@ -213,36 +214,42 @@ export function VercelSection() {
                   </>
                 )}
               </div>
-              <Select
-                value={currentTeamId ?? undefined}
-                onValueChange={(teamId) => {
-                  const team = teams.find((t) => t.id === teamId);
-                  if (team) {
-                    handleTeamChange(team);
-                  }
-                }}
-                disabled={!teams.length}
-              >
-                <SelectTrigger className="w-48">
-                  <SelectValue placeholder="Select a team…" />
-                </SelectTrigger>
-                <SelectContent>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!teams.length}
+                    className="gap-1.5"
+                  >
+                    Change
+                    <ChevronDown className="size-3 text-muted-foreground" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-56 p-1">
                   {teams.map((team) => (
-                    <SelectItem key={team.id} value={team.id}>
-                      <div className="flex items-center gap-2">
-                        <Image
-                          src={`https://vercel.com/api/www/avatar?teamId=${team.id}&s=32`}
-                          alt=""
-                          width={16}
-                          height={16}
-                          className="size-4 rounded-full"
-                        />
-                        <span>{team.name}</span>
-                      </div>
-                    </SelectItem>
+                    <button
+                      key={team.id}
+                      type="button"
+                      onClick={() => handleTeamChange(team)}
+                      className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm transition-colors hover:bg-accent ${
+                        team.id === currentTeamId
+                          ? "text-foreground"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      <Image
+                        src={`https://vercel.com/api/www/avatar?teamId=${team.id}&s=32`}
+                        alt=""
+                        width={16}
+                        height={16}
+                        className="size-4 rounded-full"
+                      />
+                      <span className="truncate">{team.name}</span>
+                    </button>
                   ))}
-                </SelectContent>
-              </Select>
+                </PopoverContent>
+              </Popover>
             </div>
           )}
         </div>
