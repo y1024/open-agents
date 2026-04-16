@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/session/constants";
 import { getServerSession } from "@/lib/session/get-server-session";
+import { needsOnboarding } from "@/lib/onboarding";
 import { HomePage } from "./home-page";
 
 export const metadata: Metadata = {
@@ -13,6 +14,9 @@ export const metadata: Metadata = {
 export default async function Home() {
   const session = await getServerSession();
   if (session?.user) {
+    if (await needsOnboarding(session.user.id)) {
+      redirect("/onboarding");
+    }
     redirect("/sessions");
   }
 

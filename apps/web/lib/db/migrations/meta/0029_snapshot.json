@@ -1,5 +1,5 @@
 {
-  "id": "0ef85fdb-f84e-4b70-a87a-187812ccbd0a",
+  "id": "84ebe625-1886-43b1-82ba-7fc78ed49f51",
   "prevId": "bd4e8f58-7708-4bd8-91e6-99cc595639df",
   "version": "7",
   "dialect": "postgresql",
@@ -1131,12 +1131,6 @@
           "notNull": true,
           "default": "'[]'::jsonb"
         },
-        "onboarding_completed_at": {
-          "name": "onboarding_completed_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -1334,6 +1328,12 @@
         },
         "gateway_api_key": {
           "name": "gateway_api_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "gateway_api_key_id": {
+          "name": "gateway_api_key_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false

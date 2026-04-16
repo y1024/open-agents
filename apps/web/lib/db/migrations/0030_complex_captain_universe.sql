@@ -1,1 +1,0 @@
-ALTER TABLE "vercel_connections" ADD COLUMN "gateway_api_key_id" text;

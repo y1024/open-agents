@@ -1,11 +1,9 @@
-import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { type NextRequest } from "next/server";
 import { encrypt } from "@/lib/crypto";
-import { db } from "@/lib/db/client";
-import { userPreferences } from "@/lib/db/schema";
 import { upsertUser } from "@/lib/db/users";
 import { encryptJWE } from "@/lib/jwe/encrypt";
+import { needsOnboarding } from "@/lib/onboarding";
 import { SESSION_COOKIE_NAME } from "@/lib/session/constants";
 import { exchangeVercelCode, getVercelUserInfo } from "@/lib/vercel/oauth";
 
@@ -91,16 +89,10 @@ export async function GET(req: NextRequest): Promise<Response> {
       Date.now() + 365 * 24 * 60 * 60 * 1000,
     ).toUTCString();
 
-    // Redirect new users (no onboarding completed) to /onboarding
+    // Redirect users who haven't completed onboarding
     let redirectTo = storedRedirectTo;
     if (storedRedirectTo === "/") {
-      const [prefs] = await db
-        .select({ onboardingCompletedAt: userPreferences.onboardingCompletedAt })
-        .from(userPreferences)
-        .where(eq(userPreferences.userId, userId))
-        .limit(1);
-
-      if (!prefs?.onboardingCompletedAt) {
+      if (await needsOnboarding(userId)) {
         redirectTo = "/onboarding";
       }
     }

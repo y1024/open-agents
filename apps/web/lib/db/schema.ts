@@ -396,8 +396,6 @@ export const userPreferences = pgTable("user_preferences", {
     .$type<string[]>()
     .notNull()
     .default([]),
-  // Tracks whether the user has completed the onboarding flow
-  onboardingCompletedAt: timestamp("onboarding_completed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

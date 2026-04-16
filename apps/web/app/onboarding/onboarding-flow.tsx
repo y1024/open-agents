@@ -94,22 +94,9 @@ export function OnboardingFlow() {
     }
   };
 
-  const handleGetStarted = async () => {
+  const handleGetStarted = () => {
     setIsCompleting(true);
-    try {
-      const res = await fetch("/api/onboarding/complete", { method: "POST" });
-      if (!res.ok) {
-        const data = (await res.json()) as { error?: string };
-        throw new Error(data.error ?? "Failed to complete onboarding");
-      }
-      router.push("/");
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Something went wrong",
-        { position: "bottom-left" },
-      );
-      setIsCompleting(false);
-    }
+    router.push("/");
   };
 
   const steps: { id: StepId; title: string }[] = [
@@ -201,9 +188,15 @@ export function OnboardingFlow() {
                     <div className="overflow-hidden">
                       <div className="pb-5">
                         {step.id === 1 && (
-                          <TeamSelector
-                            onComplete={() => markComplete(1)}
-                          />
+                          <>
+                            <p className="mb-3 text-xs text-zinc-500">
+                              All token usage is billed through the selected
+                              Vercel team using an AI Gateway API key.
+                            </p>
+                            <TeamSelector
+                              onComplete={() => markComplete(1)}
+                            />
+                          </>
                         )}
                         {step.id === 2 && (
                           <GitHubConnector
